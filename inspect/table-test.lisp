@@ -50,7 +50,7 @@
                  (got (funcall parser font)))
             (dolist (row (read-tsv tsv))
               (when (and (>= (length (car row)) plen)
-                         (string= prefix (car row) :end2 plen))
+                         (string-equal prefix (car row) :end2 plen))
                 (let* ((field (subseq (car row) plen))
                        (cell (assoc field got :test #'string=)))
                   (cond
