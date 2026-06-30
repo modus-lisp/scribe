@@ -20,9 +20,4 @@
 
 (defstruct glyph-pos gid x-advance y-advance x-offset y-offset cluster)
 
-(defun shape-run (font text &key (features '(:liga :calt :kern))
-                                 (script :latn) (direction :ltr) variation)
-  "Shape TEXT (a string) with FONT into positioned glyphs applying FEATURES.
-   [not yet implemented — shape.lisp milestone 3/4]"
-  (declare (ignore font text features script direction variation))
-  (error "scribe: shape-run not yet implemented"))
+;;; shape-run + the GSUB/GPOS engine live in otl.lisp (loaded next).

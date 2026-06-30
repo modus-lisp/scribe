@@ -25,4 +25,5 @@ gamma-correct linear-light compositing. No FFI, no FreeType, no HarfBuzz."
      (:file "cff")       ; DONE: CFF/Type2 charstring outlines (strong-tier)
      (:file "glyf")      ; DONE: glyf/loca outlines + cmap dispatch (strong-tier)
      (:file "raster")    ; DONE: analytic-coverage rasterizer (quad + cubic)
-     (:file "shape")))))  ; scaffold: GSUB/GPOS shaping
+     (:file "shape")     ; glyph-pos struct
+     (:file "otl")))))   ; DONE: GSUB/GPOS shaping — kerning + ligatures (strong-tier)

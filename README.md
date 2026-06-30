@@ -58,8 +58,9 @@ coverage   ──blend──▶ gamma-correct linear-light compositing          
 2. analytic-coverage rasterizer (quad + cubic) — **done**
 3. TrueType parse (`cmap`/`glyf`/`loca`/`hmtx`) → real glyphs, subpixel-positioned — **done**
 4. CFF/CFF2 (cubic charstrings, flex hints) — **done** (non-CID)
-5. GPOS kerning + GSUB `liga`/`calt` — next
-6. variable fonts (`fvar`/`gvar`)
+5. GPOS kerning + GSUB ligatures — **done** (byte-identical to HarfBuzz on the
+   test corpus; remaining lookup *formats* are the W4 swarm surface)
+6. variable fonts (`fvar`/`gvar`) — next
 7. WOFF2 (via `brotli-pure`)
 8. the long tail: BiDi, complex shaping, COLR/emoji, hinting, LCD subpixel
 

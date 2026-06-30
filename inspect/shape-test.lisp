@@ -1,0 +1,56 @@
+;;;; shape-test.lisp — shaping gate vs the HarfBuzz oracle.
+;;;;   ... --eval '(asdf:load-system "scribe")' --load inspect/shape-test.lisp \
+;;;;       --eval '(scribe.stest:run-all)'
+(defpackage #:scribe.stest (:use #:cl) (:export #:run-all))
+(in-package #:scribe.stest)
+(defparameter *here* (directory-namestring (or *load-truename* *load-pathname*)))
+
+(defun read-font (stem)
+  (let ((p (or (probe-file (merge-pathnames (format nil "corpus/~a.ttf" stem) *here*))
+               (probe-file (merge-pathnames (format nil "corpus/~a.otf" stem) *here*)))))
+    (with-open-file (s p :element-type '(unsigned-byte 8))
+      (let ((v (make-array (file-length s) :element-type '(unsigned-byte 8))))
+        (read-sequence v s) v))))
+
+(defun run-all ()
+  (let ((pass 0) (fail 0) (examples '()) (fonts (make-hash-table :test 'equal))
+        (secs 0) (secfail 0))
+    (with-open-file (s (merge-pathnames "vectors/shape/expected.txt" *here*))
+      (let ((stem nil) (text nil) (expected '()))
+        (flet ((flush ()
+                 (when stem
+                   (incf secs)
+                   (let* ((font (or (gethash stem fonts)
+                                    (setf (gethash stem fonts) (scribe:open-font (read-font stem)))))
+                          (buf (scribe:shape-run font text))
+                          (got (loop for g across buf
+                                     collect (list (scribe::glyph-pos-gid g)
+                                                   (scribe::glyph-pos-x-advance g)
+                                                   (scribe::glyph-pos-x-offset g))))
+                          (exp (nreverse expected)) (bad nil))
+                     (if (/= (length got) (length exp))
+                         (progn (setf bad t)
+                                (when (< (length examples) 8)
+                                  (push (format nil "~a|~a: ~d glyphs, oracle ~d" stem text (length got) (length exp)) examples)))
+                         (loop for g in got for e in exp do
+                           (if (equal g e) (incf pass)
+                               (progn (incf fail) (setf bad t)
+                                      (when (< (length examples) 8)
+                                        (push (format nil "~a|~a: got ~a want ~a" stem text g e) examples))))))
+                     (when bad (incf secfail)))
+                   (setf expected '()))))
+          (loop for line = (read-line s nil) while line do
+            (cond ((and (> (length line) 0) (char= (char line 0) #\#))
+                   (flush)
+                   (let* ((bar (search " | " line)))
+                     (setf stem (string-trim " " (subseq line 1 bar))
+                           text (subseq line (+ bar 3)))))
+                  ((zerop (length line)))
+                  (t (let* ((a (position #\Space line)) (b (position #\Space line :start (1+ a))))
+                       (push (list (parse-integer line :end a)
+                                   (parse-integer line :start (1+ a) :end b)
+                                   (parse-integer line :start (1+ b))) expected)))))
+          (flush))))
+    (format t "~&shaping: ~d/~d glyph-positions match; ~d/~d sections clean~%"
+            pass (+ pass fail) (- secs secfail) secs)
+    (dolist (e (nreverse examples)) (format t "    ~a~%" e))))
