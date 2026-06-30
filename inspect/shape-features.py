@@ -70,7 +70,7 @@ def find_font(stem):
         p = os.path.join(HERE, "corpus", stem + ext)
         if os.path.exists(p):
             return p
-    raise SystemExit("missing font: " + stem)
+    return None   # skip cases whose font isn't present (e.g. non-redistributable)
 
 
 def shape(font_path, text, features):
@@ -89,6 +89,8 @@ def shape(font_path, text, features):
 def main():
     for stem, extra, text in CASES:
         fp = find_font(stem)
+        if fp is None:
+            continue
         feats = {f: True for f in DEFAULT_ON}
         for f in extra:
             feats[f] = True
