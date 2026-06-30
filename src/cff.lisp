@@ -1,4 +1,4 @@
-;;;; cff.lisp — CFF (PostScript/Type2) outlines.  STRONG-TIER coupled core.
+;;;; cff.lisp — CFF (PostScript/Type2) outlines.
 ;;;;
 ;;;; Parses the CFF table (INDEX/DICT structures) and interprets Type2
 ;;;; charstrings into cubic-Bezier contours (font units), feeding the same

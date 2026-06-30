@@ -1,9 +1,9 @@
-;;;; cmap.lisp — cmap header (strong-tier kernel for W2) + format 6 reference.
+;;;; cmap.lisp — cmap header + format 6 reference.
 ;;;;
-;;;; (cmap-subtables font) lists the subtables; each FORMAT body parser is an
-;;;; independent swarm unit (src/tables/cmap-<fmt>.lisp) taking (d off) and
-;;;; returning a hash-table codepoint->gid, EXCLUDING gid 0 (fontTools policy).
-;;;; Format 6 is the proven reference; formats 4 and 12 are swarmed.
+;;;; (cmap-subtables font) lists the subtables; each FORMAT body parser
+;;;; (src/tables/cmap-<fmt>.lisp) takes (d off) and returns a hash-table
+;;;; codepoint->gid, EXCLUDING gid 0 (fontTools policy). Format 6 is here;
+;;;; formats 4 and 12 are in src/tables/.
 (in-package #:scribe)
 
 (defun cmap-subtables (font)

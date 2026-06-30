@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""ttx-oracle.py — vendor ground-truth sfnt table fields for the scribe swarm.
+"""ttx-oracle.py — vendor ground-truth sfnt table fields for scribe's table gates.
 
 Reference (fontTools) is used in the HARNESS ONLY, never in scribe. Run once;
-the emitted TSVs are the offline oracle the workers diff against.
+the emitted TSVs are the offline oracle the gates diff against.
 
   python3 inspect/ttx-oracle.py
   -> inspect/vectors/tables/<font>.tsv   (lines: "table.field<TAB>value")

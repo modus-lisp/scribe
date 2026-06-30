@@ -1,6 +1,6 @@
 ;;;; var.lisp — OpenType variable fonts: fvar axes, avar remap, gvar deltas.
-;;;; STRONG-TIER (coupled to the outline model). Applies glyph variation deltas
-;;;; for a design-space LOCATION (alist of axis-tag -> user value) before the
+;;;; Applies glyph variation deltas for a design-space LOCATION
+;;;; (alist of axis-tag -> user value) before the
 ;;;; outline is built, plus advance deltas from gvar phantom points.
 (in-package #:scribe)
 

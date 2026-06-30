@@ -1,8 +1,8 @@
-;;;; table-test.lisp — per-table oracle gate for the W1 swarm.
+;;;; table-test.lisp — per-table oracle gate.
 ;;;;
 ;;;; Loaded AFTER (asdf:load-system "scribe"). Diffs (parse-<unit> font) against
 ;;;; the vendored ground truth inspect/vectors/tables/<font>.tsv (from
-;;;; ttx-oracle.py). Non-vacuous: zero fields checked => FAIL (SWARM.md inv. 3).
+;;;; ttx-oracle.py). Non-vacuous: zero fields checked => FAIL.
 ;;;;
 ;;;;   sbcl ... --eval '(asdf:load-system "scribe")' \
 ;;;;       --load inspect/table-test.lisp --eval '(scribe.test:run "head")'

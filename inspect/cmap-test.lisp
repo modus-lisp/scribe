@@ -1,4 +1,4 @@
-;;;; cmap-test.lisp — per-format cmap oracle gate for W2.
+;;;; cmap-test.lisp — per-format cmap oracle gate.
 ;;;;
 ;;;; Loaded AFTER (asdf:load-system "scribe"). For unit "cmap-<fmt>", runs the
 ;;;; unit's (parse-cmap-<fmt> d off) on every corpus subtable of that format and

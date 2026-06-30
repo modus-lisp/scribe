@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cmap-oracle.py — vendor per-subtable codepoint->gid ground truth for W2.
+"""cmap-oracle.py — vendor per-subtable codepoint->gid ground truth for the cmap gate.
 
 For each corpus font and each cmap subtable of a format we test (4, 6, 12),
 write inspect/vectors/cmap/<stem>.<pid>.<eid>.<fmt>.tsv with "cp<TAB>gid" lines

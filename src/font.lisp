@@ -1,10 +1,9 @@
 ;;;; font.lisp — sfnt / OpenType parsing.
 ;;;;
-;;;; STRONG-TIER KERNEL (this file's reader + directory + head/maxp/hhea) is the
-;;;; carve that makes the table-decoder swarm fillable; see SWARM.md. Each table
-;;;; parser is an independent unit: (parse-<table> font) -> alist (field . value)
-;;;; whose field names match inspect/vectors/tables/<font>.tsv. head/maxp/hhea
-;;;; are implemented as the reference; hmtx/OS_2/post/name are swarm stubs.
+;;;; The reader + table directory + the three foundation tables (head/maxp/hhea)
+;;;; everything else needs. Each table parser is (parse-<table> font) -> alist
+;;;; (field . value) whose field names match inspect/vectors/tables/<font>.tsv;
+;;;; the remaining decoders live one file each under src/tables/.
 (in-package #:scribe)
 
 ;;; ---- big-endian readers over the raw font bytes (absolute offsets) ----
@@ -98,13 +97,6 @@
           (cons "xMaxExtent"          (s16 d (+ o 16)))
           (cons "numberOfHMetrics"    (u16 d (+ o 34))))))
 
-;;; ---- SWARM W1 table decoders live one-per-file in src/tables/ so collection
-;;; ---- is a single-file copy: src/tables/{hmtx,os_2,post,name}.lisp ----
-
-;;; ---- cmap (W2) + outlines (strong-tier) stay as later milestones ----
-(defun font-glyph-index (font codepoint)
-  (declare (ignore font codepoint))
-  (error "scribe: cmap not yet implemented (W2)"))
-(defun glyph-outline (font gid &key variation)
-  (declare (ignore font gid variation))
-  (error "scribe: glyf/loca outlines not yet implemented (strong-tier)"))
+;;; The remaining table decoders live one file each in
+;;; src/tables/{hmtx,os_2,post,name}.lisp. cmap is in cmap.lisp; glyf/CFF
+;;; outlines and font-glyph-index are in glyf.lisp.

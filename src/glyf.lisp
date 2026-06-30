@@ -1,5 +1,5 @@
 ;;;; glyf.lisp — TrueType glyph outlines (glyf/loca) + cmap dispatch.
-;;;; STRONG-TIER (coupled core; not swarmed). Produces outlines as a list of
+;;;; Produces outlines as a list of
 ;;;; contours, each a list of segments in FONT UNITS:
 ;;;;   (:move x y) (:line x y) (:quad cx cy x y)
 ;;;; Simple + composite glyphs; the rasterizer flattens quads.

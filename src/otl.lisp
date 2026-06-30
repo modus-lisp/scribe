@@ -1,4 +1,4 @@
-;;;; otl.lisp — OpenType Layout: GSUB/GPOS shaping.  STRONG-TIER.
+;;;; otl.lisp — OpenType Layout: GSUB/GPOS shaping.
 ;;;;
 ;;;; The coupled engine: Coverage/ClassDef parsing, GDEF glyph classes,
 ;;;; Script/Feature/Lookup navigation, the glyph buffer, lookupFlag skipping, and
