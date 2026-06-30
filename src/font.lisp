@@ -37,7 +37,10 @@
 (defun open-font (bytes)
   "Parse an sfnt/OpenType font. Reads the table directory and the three
    foundation tables (head/maxp/hhea) that everything else needs."
-  (let* ((d (coerce bytes '(simple-array (unsigned-byte 8) (*))))
+  (let* ((d0 (coerce bytes '(simple-array (unsigned-byte 8) (*))))
+         ;; Transparently accept .woff2 / .woff: detect the signature and
+         ;; decompress to a standard in-memory sfnt before parsing.
+         (d (maybe-decompress-web-font d0))
          (ver (u32 d 0)))
     (when (= ver #x74746366) (error "scribe: TrueType Collections not yet supported"))
     (unless (or (= ver #x00010000)        ; TrueType outlines

@@ -13,7 +13,7 @@
 ;;;; All multi-byte integers in the on-disk structures are BIG-ENDIAN unless a
 ;;;; reader is explicitly named *-le.
 
-(load (merge-pathnames "deflate.lisp" *load-pathname*))
+(load (merge-pathnames "../src/deflate.lisp" *load-pathname*))
 
 (defpackage #:dmg-fonts
   (:use #:cl)
