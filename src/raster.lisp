@@ -82,6 +82,19 @@
   (let ((tail (last (cdr seg) 2)))
     (setf *lpx* (funcall tx (first tail)) *lpy* (funcall ty (second tail)))))
 
+(defun %flatten-cubic (r x0 y0 c1x c1y c2x c2y x1 y1)
+  "Adaptively subdivide a cubic Bezier into line segments accumulated into R."
+  (declare (type double-float x0 y0 c1x c1y c2x c2y x1 y1))
+  (let* ((dev (+ (abs (- (+ x0 c2x) c1x c1x)) (abs (- (+ y0 c2y) c1y c1y))
+                 (abs (- (+ c1x x1) c2x c2x)) (abs (- (+ c1y y1) c2y c2y))))
+         (nseg (max 1 (min 48 (ceiling (sqrt (* 0.75d0 dev)))))))
+    (loop with px = x0 with py = y0
+          for i from 1 to nseg
+          for tt = (/ (float i 1d0) nseg) for mt = (- 1d0 tt)
+          for qx = (+ (* mt mt mt x0) (* 3d0 mt mt tt c1x) (* 3d0 mt tt tt c2x) (* tt tt tt x1))
+          for qy = (+ (* mt mt mt y0) (* 3d0 mt mt tt c1y) (* 3d0 mt tt tt c2y) (* tt tt tt y1))
+          do (%acc-line r px py qx qy) (setf px qx py qy))))
+
 (defun rasterize-outline (contours scale &key (dx 0d0) (dy 0d0) origin-x origin-y)
   "Scan-convert CONTOURS (font units) at SCALE px/unit with fractional pen offset
    (DX,DY) into a coverage bitmap. ORIGIN-X/Y (font units) map to bitmap (0,0);
@@ -102,15 +115,21 @@
       (flet ((tx (x) (+ (* (- x ox) scale) dx))
              (ty (y) (+ (* (- oy y) scale) dy)))
         (dolist (c contours)
-          (dolist (seg c)
-            (ecase (car seg)
-              (:move nil)
-              (:line (destructuring-bind (x y) (cdr seg)
-                       (let ((p (%last-point))) (%acc-line r (car p) (cdr p) (tx x) (ty y)))))
-              (:quad (destructuring-bind (cx cy x y) (cdr seg)
-                       (let ((p (%last-point)))
-                         (%flatten-quad r (car p) (cdr p) (tx cx) (ty cy) (tx x) (ty y))))))
-            (%set-last-point seg #'tx #'ty)))
+          (let ((mvx 0d0) (mvy 0d0))                ; contour start, for explicit close
+            (dolist (seg c)
+              (ecase (car seg)
+                (:move (setf mvx (tx (second seg)) mvy (ty (third seg))))
+                (:line (destructuring-bind (x y) (cdr seg)
+                         (let ((p (%last-point))) (%acc-line r (car p) (cdr p) (tx x) (ty y)))))
+                (:quad (destructuring-bind (cx cy x y) (cdr seg)
+                         (let ((p (%last-point)))
+                           (%flatten-quad r (car p) (cdr p) (tx cx) (ty cy) (tx x) (ty y)))))
+                (:cubic (destructuring-bind (c1x c1y c2x c2y x y) (cdr seg)
+                          (let ((p (%last-point)))
+                            (%flatten-cubic r (car p) (cdr p) (tx c1x) (ty c1y)
+                                            (tx c2x) (ty c2y) (tx x) (ty y))))))
+              (%set-last-point seg #'tx #'ty))
+            (%acc-line r *lpx* *lpy* mvx mvy)))      ; close contour (no-op if already closed)
         ;; prefix-sum each row -> coverage
         (let ((cov (make-array (* w h) :element-type 'double-float)))
           (dotimes (y h)

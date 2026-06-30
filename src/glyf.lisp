@@ -85,8 +85,11 @@
         (nreverse segs)))))
 
 (defun glyph-outline (font gid &key variation)
-  "Return GID's outline as a list of contours (each a segment list) in font units."
+  "Return GID's outline as a list of contours (each a segment list) in font units.
+   Dispatches to CFF (cubic) for OTTO fonts, else glyf/loca (quadratic)."
   (declare (ignore variation))
+  (when (font-table font "CFF ")
+    (return-from glyph-outline (cff-glyph-outline font gid)))
   (multiple-value-bind (off len) (loca-offset font gid)
     (when (zerop len) (return-from glyph-outline nil))     ; empty glyph (e.g. space)
     (let* ((d (font-data font)) (g (+ (req-table font "glyf") off))

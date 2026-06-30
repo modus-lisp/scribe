@@ -22,6 +22,7 @@ gamma-correct linear-light compositing. No FFI, no FreeType, no HarfBuzz."
      (:file "cmap")      ; DONE: cmap header kernel + format 6 (strong-tier)
      (:file "tables/cmap-4")   ; W2 swarm units
      (:file "tables/cmap-12")
+     (:file "cff")       ; DONE: CFF/Type2 charstring outlines (strong-tier)
      (:file "glyf")      ; DONE: glyf/loca outlines + cmap dispatch (strong-tier)
-     (:file "raster")    ; DONE: analytic-coverage rasterizer
+     (:file "raster")    ; DONE: analytic-coverage rasterizer (quad + cubic)
      (:file "shape")))))  ; scaffold: GSUB/GPOS shaping

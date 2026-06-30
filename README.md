@@ -55,10 +55,10 @@ coverage   ──blend──▶ gamma-correct linear-light compositing          
 ## Build order (optimized for Latin/code fonts at HiDPI first)
 
 1. linear-light compositing — **done**
-2. analytic-coverage quadratic rasterizer
-3. TrueType parse (`cmap`/`glyf`/`loca`/`hmtx`) → real glyphs, subpixel-positioned
-4. CFF/CFF2 (cubic charstrings)
-5. GPOS kerning + GSUB `liga`/`calt`
+2. analytic-coverage rasterizer (quad + cubic) — **done**
+3. TrueType parse (`cmap`/`glyf`/`loca`/`hmtx`) → real glyphs, subpixel-positioned — **done**
+4. CFF/CFF2 (cubic charstrings, flex hints) — **done** (non-CID)
+5. GPOS kerning + GSUB `liga`/`calt` — next
 6. variable fonts (`fvar`/`gvar`)
 7. WOFF2 (via `brotli-pure`)
 8. the long tail: BiDi, complex shaping, COLR/emoji, hinting, LCD subpixel
