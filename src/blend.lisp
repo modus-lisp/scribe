@@ -72,6 +72,11 @@
 ;;; Gamma-correct coverage compositing
 ;;; ---------------------------------------------------------------------------
 
+(defparameter *stem-darkening* 1d0
+  "Coverage exponent applied before compositing (CoreGraphics-style stem
+   darkening). 1.0 = geometric/linear-correct; <1 thickens & darkens strokes so
+   text reads solid instead of washed-out; >1 lightens. ~0.7 ≈ macOS weight.")
+
 (declaim (inline blend-coverage))
 (defun blend-coverage (cv x y coverage fg)
   "Composite FG (list R G B, 8-bit) over pixel (X,Y) at COVERAGE in [0,1],
@@ -81,7 +86,9 @@
              (> coverage 0d0))
     (let* ((px (canvas-pixels cv))
            (i (* 3 (+ (* y (canvas-width cv)) x)))
-           (a (min 1d0 coverage)) (ia (- 1d0 a))
+           (a (if (= *stem-darkening* 1d0) (min 1d0 coverage)
+                  (expt (min 1d0 coverage) *stem-darkening*)))
+           (ia (- 1d0 a))
            (fr (srgb->linear (first fg)))
            (fg* (srgb->linear (second fg)))
            (fb (srgb->linear (third fg))))

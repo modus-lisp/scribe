@@ -1,0 +1,46 @@
+;;;; weight-demo.lisp — stem darkening (CoreGraphics/Safari-style) vs linear, and
+;;;; a HiDPI (2x) strip — the smooth, un-hinted, properly-weighted target.
+;;;;   sbcl --script demo/weight-demo.lisp  -> /tmp/scribe-weight.png
+(require :asdf)
+(let ((here (directory-namestring *load-truename*)))
+  (push (truename (merge-pathnames "../" here)) asdf:*central-registry*)
+  (asdf:load-system "scribe"))
+(in-package #:scribe)
+
+(defun rd (p)
+  (with-open-file (s p :element-type '(unsigned-byte 8))
+    (let ((v (make-array (file-length s) :element-type '(unsigned-byte 8))))
+      (read-sequence v s) v)))
+
+(defun blit (cv cov w h ox oy color)
+  (dotimes (yy h)
+    (dotimes (xx w)
+      (let ((c (aref cov (+ (* yy w) xx))))
+        (when (> c 0d0) (blend-coverage cv (+ ox xx) (+ oy yy) c color))))))
+
+(defun draw (cv font text ppem x baseline color)
+  (let ((scale (/ (float ppem 1d0) (font-units-per-em font)))
+        (penx (float x 1d0)))
+    (loop for g across (shape-run font text) do
+      (let* ((gx (+ penx (* (glyph-pos-x-offset g) scale)))
+             (sub (- gx (ffloor gx))))
+        (multiple-value-bind (cov w h left top)
+            (rasterize-glyph font (glyph-pos-gid g) ppem :subpixel sub)
+          (when cov (blit cv cov w h (+ (floor gx) left) (+ baseline top) color)))
+        (incf penx (* (glyph-pos-x-advance g) scale))))))
+
+(let* ((here (directory-namestring *load-truename*))
+       (font (open-font (rd (merge-pathnames "../inspect/corpus/DejaVuSans.ttf" here))))
+       (cv (make-canvas 560 250 '(252 252 252)))
+       (ink '(24 24 28)) (g '(140 140 148))
+       (s "affluent office Hamburgefonstiv fi ffl 0123"))
+  (let ((*stem-darkening* 1d0))
+    (draw cv font "linear-correct (reads thin):" 12 16 28 g)
+    (draw cv font s 18 16 62 ink)
+    (draw cv font s 13 16 92 ink))
+  (let ((*stem-darkening* 0.68d0))
+    (draw cv font "stem-darkened 0.68 (CoreGraphics/Safari weight):" 12 16 150 g)
+    (draw cv font s 18 16 184 ink)
+    (draw cv font s 13 16 214 ink))
+  (write-png cv "/tmp/scribe-weight.png")
+  (format t "~&wrote /tmp/scribe-weight.png~%"))

@@ -61,19 +61,28 @@
                    (when (and (>= xbi 0) (< xbi w)) (incf (aref a (+ linestart xbi)) (* d am))))))
               (setf x xnext))))))))
 
-(defun %flatten-quad (r x0 y0 cx cy x1 y1)
-  "Adaptively subdivide a quadratic Bezier into line segments accumulated into R."
+(defparameter *flatten-tol* 0.08d0 "Max chord deviation (device px) when flattening curves.")
+
+(declaim (inline %dist-to-chord))
+(defun %dist-to-chord (px py x0 y0 x1 y1)
+  "Perpendicular distance of (px,py) from the chord (x0,y0)-(x1,y1)."
+  (declare (type double-float px py x0 y0 x1 y1))
+  (let ((dx (- x1 x0)) (dy (- y1 y0)))
+    (let ((l2 (+ (* dx dx) (* dy dy))))
+      (if (< l2 1d-9)
+          (+ (abs (- px x0)) (abs (- py y0)))
+          (/ (abs (- (* (- px x0) dy) (* (- py y0) dx))) (sqrt l2))))))
+
+(defun %flatten-quad (r x0 y0 cx cy x1 y1 &optional (depth 0))
+  "Recursively subdivide a quadratic Bezier until flat to *flatten-tol*."
   (declare (type double-float x0 y0 cx cy x1 y1))
-  ;; subdivision count from control-point deviation (cheap, ample at text sizes)
-  (let* ((dev (+ (abs (- (+ x0 x1) cx cx)) (abs (- (+ y0 y1) cy cy))))
-         (nseg (max 1 (min 32 (ceiling (sqrt (* 0.5d0 dev)))))))
-    (loop with px = x0 with py = y0
-          for i from 1 to nseg
-          for tt = (/ (float i 1d0) nseg)
-          for mt = (- 1d0 tt)
-          for qx = (+ (* mt mt x0) (* 2d0 mt tt cx) (* tt tt x1))
-          for qy = (+ (* mt mt y0) (* 2d0 mt tt cy) (* tt tt y1))
-          do (%acc-line r px py qx qy) (setf px qx py qy))))
+  (if (or (>= depth 20) (<= (%dist-to-chord cx cy x0 y0 x1 y1) *flatten-tol*))
+      (%acc-line r x0 y0 x1 y1)
+      (let* ((ax (* 0.5d0 (+ x0 cx))) (ay (* 0.5d0 (+ y0 cy)))
+             (bx (* 0.5d0 (+ cx x1))) (by (* 0.5d0 (+ cy y1)))
+             (mx (* 0.5d0 (+ ax bx))) (my (* 0.5d0 (+ ay by))))
+        (%flatten-quad r x0 y0 ax ay mx my (1+ depth))
+        (%flatten-quad r mx my bx by x1 y1 (1+ depth)))))
 
 ;;; tiny pen state for rasterize-outline (move/line/quad chaining)
 (defvar *lpx* 0d0) (defvar *lpy* 0d0)
@@ -82,18 +91,21 @@
   (let ((tail (last (cdr seg) 2)))
     (setf *lpx* (funcall tx (first tail)) *lpy* (funcall ty (second tail)))))
 
-(defun %flatten-cubic (r x0 y0 c1x c1y c2x c2y x1 y1)
-  "Adaptively subdivide a cubic Bezier into line segments accumulated into R."
+(defun %flatten-cubic (r x0 y0 c1x c1y c2x c2y x1 y1 &optional (depth 0))
+  "Recursively subdivide a cubic Bezier until both controls are flat to tol."
   (declare (type double-float x0 y0 c1x c1y c2x c2y x1 y1))
-  (let* ((dev (+ (abs (- (+ x0 c2x) c1x c1x)) (abs (- (+ y0 c2y) c1y c1y))
-                 (abs (- (+ c1x x1) c2x c2x)) (abs (- (+ c1y y1) c2y c2y))))
-         (nseg (max 1 (min 48 (ceiling (sqrt (* 0.75d0 dev)))))))
-    (loop with px = x0 with py = y0
-          for i from 1 to nseg
-          for tt = (/ (float i 1d0) nseg) for mt = (- 1d0 tt)
-          for qx = (+ (* mt mt mt x0) (* 3d0 mt mt tt c1x) (* 3d0 mt tt tt c2x) (* tt tt tt x1))
-          for qy = (+ (* mt mt mt y0) (* 3d0 mt mt tt c1y) (* 3d0 mt tt tt c2y) (* tt tt tt y1))
-          do (%acc-line r px py qx qy) (setf px qx py qy))))
+  (if (or (>= depth 20)
+          (and (<= (%dist-to-chord c1x c1y x0 y0 x1 y1) *flatten-tol*)
+               (<= (%dist-to-chord c2x c2y x0 y0 x1 y1) *flatten-tol*)))
+      (%acc-line r x0 y0 x1 y1)
+      (let* ((p01x (* 0.5d0 (+ x0 c1x))) (p01y (* 0.5d0 (+ y0 c1y)))
+             (p12x (* 0.5d0 (+ c1x c2x))) (p12y (* 0.5d0 (+ c1y c2y)))
+             (p23x (* 0.5d0 (+ c2x x1))) (p23y (* 0.5d0 (+ c2y y1)))
+             (ax (* 0.5d0 (+ p01x p12x))) (ay (* 0.5d0 (+ p01y p12y)))
+             (bx (* 0.5d0 (+ p12x p23x))) (by (* 0.5d0 (+ p12y p23y)))
+             (mx (* 0.5d0 (+ ax bx))) (my (* 0.5d0 (+ ay by))))
+        (%flatten-cubic r x0 y0 p01x p01y ax ay mx my (1+ depth))
+        (%flatten-cubic r mx my bx by p23x p23y x1 y1 (1+ depth)))))
 
 (defun rasterize-outline (contours scale &key (dx 0d0) (dy 0d0) origin-x origin-y)
   "Scan-convert CONTOURS (font units) at SCALE px/unit with fractional pen offset
