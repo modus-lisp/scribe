@@ -44,15 +44,17 @@
               (cond ((logbitp 2 f) (let ((dy (u8 d p))) (incf p) (incf y (if (logbitp 5 f) dy (- dy)))))
                     ((not (logbitp 5 f)) (incf y (s16 d p)) (incf p 2)))
               (setf (aref ys k) y))))
-        ;; split into contours
-        (let ((contours '()) (start 0))
-          (dotimes (c ncont)
-            (let ((end (aref endpts c)) (pts '()))
-              (loop for k from start to end do
-                (push (list (aref xs k) (aref ys k) (logbitp 0 (aref flags k))) pts))
-              (push (nreverse pts) contours)
-              (setf start (1+ end))))
-          (nreverse contours))))))
+        (values xs ys flags endpts)))))
+
+(defun %points->contours (xs ys flags endpts ncont)
+  "Build contour point-lists ((x y on-curve)*) from raw glyph points."
+  (let ((contours '()) (start 0))
+    (dotimes (c ncont (nreverse contours))
+      (let ((end (aref endpts c)) (pts '()))
+        (loop for k from start to end do
+          (push (list (aref xs k) (aref ys k) (logbitp 0 (aref flags k))) pts))
+        (push (nreverse pts) contours)
+        (setf start (1+ end))))))
 
 (defun %contour->segments (pts)
   "PTS = list of (x y on-curve) for one closed contour -> segment list
@@ -95,12 +97,16 @@
     (let* ((d (font-data font)) (g (+ (req-table font "glyf") off))
            (ncont (s16 d g)))
       (if (>= ncont 0)
-          (mapcan (lambda (c) (let ((s (%contour->segments c))) (and s (list s))))
-                  (%simple-glyph d g ncont))
-          (%composite-glyph font d g)))))
+          (multiple-value-bind (xs ys flags endpts) (%simple-glyph d g ncont)
+            (when variation                                  ; apply gvar deltas
+              (apply-gvar font gid xs ys variation))
+            (mapcan (lambda (c) (let ((s (%contour->segments c))) (and s (list s))))
+                    (%points->contours xs ys flags endpts ncont)))
+          (%composite-glyph font d g variation)))))
 
-(defun %composite-glyph (font d g)
-  "Parse a composite glyph -> merged contours (recursive, with 2x2+offset xform)."
+(defun %composite-glyph (font d g &optional variation)
+  "Parse a composite glyph -> merged contours (recursive, with 2x2+offset xform).
+   VARIATION is threaded to components so their gvar deltas apply."
   (let ((p (+ g 10)) (out '()) (more t))
     (loop while more do
       (let* ((flags (u16 d p)) (cgid (u16 d (+ p 2))) (dx 0) (dy 0)
@@ -114,7 +120,7 @@
               ((logbitp 6 flags) (setf a (f2dot14 d p) e (f2dot14 d (+ p 2))) (incf p 4)) ; X_AND_Y_SCALE
               ((logbitp 7 flags) (setf a (f2dot14 d p) b (f2dot14 d (+ p 2))      ; TWO_BY_TWO
                                        c (f2dot14 d (+ p 4)) e (f2dot14 d (+ p 6))) (incf p 8)))
-        (dolist (contour (glyph-outline font cgid))         ; recurse + transform
+        (dolist (contour (glyph-outline font cgid :variation variation)) ; recurse + transform
           (push (mapcar (lambda (seg)
                           (cons (car seg)
                                 (loop for (x y) on (cdr seg) by #'cddr

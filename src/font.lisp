@@ -22,7 +22,8 @@
   data            ; (simple-array (unsigned-byte 8))
   tables          ; hash: tag-string -> (offset . length)
   units-per-em num-glyphs num-h-metrics index-to-loc-format
-  %cff)           ; cached parsed CFF (lazy) for OTTO fonts
+  %cff            ; cached parsed CFF (lazy) for OTTO fonts
+  %fvar %avar)    ; cached variation axes + avar segment maps (lazy)
 
 (defun font-table (font tag-str)
   "Return (values offset length) for TAG-STR, or NIL if absent."

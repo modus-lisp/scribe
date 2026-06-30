@@ -60,7 +60,7 @@ coverage   ──blend──▶ gamma-correct linear-light compositing          
 4. CFF/CFF2 (cubic charstrings, flex hints) — **done** (non-CID)
 5. GPOS kerning + GSUB ligatures — **done** (byte-identical to HarfBuzz on the
    test corpus; remaining lookup *formats* are the W4 swarm surface)
-6. variable fonts (`fvar`/`gvar`) — next
+6. variable fonts (`fvar`/`avar`/`gvar`) — **done** (matches fontTools instancer; New York opsz+wght)
 7. WOFF2 (via `brotli-pure`)
 8. the long tail: BiDi, complex shaping, COLR/emoji, hinting, LCD subpixel
 

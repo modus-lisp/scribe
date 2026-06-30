@@ -1,3 +1,6 @@
 *.fasl
 *.png
 /tmp/
+
+# Apple fonts — extracted for local testing only, not redistributable
+inspect/corpus/NewYork*.ttf
