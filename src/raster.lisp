@@ -158,9 +158,7 @@
   (let* ((upem (font-units-per-em font))
          (scale (/ (float ppem 1d0) upem))
          (outline (glyph-outline font gid :variation variation)))
-    (multiple-value-bind (adv lsb) (glyph-advance font gid)
-      (declare (ignore lsb))
-      (when variation (setf adv (varied-advance font gid adv variation)))
+    (let ((adv (advance-at font gid variation)))   ; hmtx + HVAR/gvar advance delta
       (if (null outline)
           (values nil 0 0 0 0 (* adv scale))
           ;; bbox in font units

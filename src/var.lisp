@@ -205,3 +205,79 @@
       (multiple-value-bind (xd yd npts) (gvar-summed-deltas font gid norm)
         (declare (ignore yd))
         (if xd (+ base (- (aref xd (1+ npts)) (aref xd npts))) base))))
+
+;;; ---- HVAR: horizontal-metrics variations (advance-width deltas) ----
+;;; The canonical advance-variation source (preferred over gvar phantom points
+;;; when present). Item Variation Store + advance-width DeltaSetIndexMap.
+
+(defun %region-scalar (d region-off axis-count norm)
+  "Scalar for one variation region (axisCount RegionAxisCoordinates) at NORM."
+  (let ((s 1d0))
+    (dotimes (a axis-count s)
+      (let* ((r (+ region-off (* a 6)))
+             (start (/ (s16 d r) 16384d0)) (peak (/ (s16 d (+ r 2)) 16384d0))
+             (end (/ (s16 d (+ r 4)) 16384d0)) (v (aref norm a)))
+        (unless (= peak 0d0)
+          (cond ((or (< v start) (> v end)) (return 0d0))
+                ((= v peak))
+                ((< v peak) (setf s (* s (/ (- v start) (- peak start)))))
+                (t (setf s (* s (/ (- end v) (- end peak)))))))))))
+
+(defun %ivs-delta (d ivs outer inner norm)
+  "Evaluate Item Variation Store delta for (outer,inner) at NORM."
+  (let* ((rlist (+ ivs (u32 d (+ ivs 2))))
+         (axis-count (u16 d rlist))
+         (ivd (+ ivs (u32 d (+ ivs 8 (* outer 4)))))
+         (wc-raw (u16 d (+ ivd 2)))
+         (long (logbitp 15 wc-raw)) (wc (logand wc-raw #x7fff))
+         (ric (u16 d (+ ivd 4)))
+         (ridx-off (+ ivd 6))
+         (row-size (+ (* wc (if long 4 2)) (* (- ric wc) (if long 2 1))))
+         (row (+ ridx-off (* ric 2) (* inner row-size)))
+         (delta 0d0))
+    (dotimes (j ric (round delta))
+      (let* ((ridx (u16 d (+ ridx-off (* j 2))))
+             (scalar (%region-scalar d (+ rlist 4 (* ridx axis-count 6)) axis-count norm))
+             (dval (if (< j wc)
+                       (if long (let ((v (u32 d (+ row (* j 4))))) (if (>= v #x80000000) (- v #x100000000) v))
+                           (s16 d (+ row (* j 2))))
+                       (let ((b (+ row (* wc (if long 4 2)))) (k (- j wc)))
+                         (if long (s16 d (+ b (* k 2)))
+                             (let ((v (u8 d (+ b k)))) (if (>= v 128) (- v 256) v)))))))
+        (incf delta (* scalar dval))))))
+
+(defun %delta-set-index (d o gid)
+  "DeltaSetIndexMap lookup -> (values outer inner) for GID."
+  (let ((fmt (u8 d o)) (ef (u8 d (+ o 1))))
+    (multiple-value-bind (mapcount data)
+        (if (= fmt 0) (values (u16 d (+ o 2)) (+ o 4)) (values (u32 d (+ o 2)) (+ o 6)))
+      (let* ((idx (min gid (1- mapcount)))
+             (esz (1+ (ash (logand ef #x30) -4)))
+             (ibits (1+ (logand ef #x0f)))
+             (entry 0))
+        (dotimes (b esz) (setf entry (logior (ash entry 8) (u8 d (+ data (* idx esz) b)))))
+        (values (ash entry (- ibits)) (logand entry (1- (ash 1 ibits))))))))
+
+(defun hvar-advance-delta (font gid norm)
+  "HVAR advance-width delta for GID at NORM (0 if no HVAR)."
+  (let ((o (font-table font "HVAR")))
+    (if (null o) 0
+        (let* ((d (font-data font)) (ivs (+ o (u32 d (+ o 4)))) (mapoff (u32 d (+ o 8))))
+          (multiple-value-bind (outer inner)
+              (if (zerop mapoff) (values 0 gid) (%delta-set-index d (+ o mapoff) gid))
+            (%ivs-delta d ivs outer inner norm))))))
+
+(defun default-norm (font)
+  "All-zero normalized location (the default instance), or NIL if not variable."
+  (let ((axes (font-fvar font)))
+    (when axes (make-array (length axes) :element-type 'double-float :initial-element 0d0))))
+
+(defun advance-at (font gid &optional norm)
+  "Advance (font units) for GID at design-space NORM: hmtx + variation delta.
+   Prefers HVAR (canonical) over gvar phantom points; HVAR applies even at the
+   default location (some fonts, e.g. Apple's New York, have nonzero HVAR there)."
+  (let ((base (glyph-advance font gid)))
+    (cond ((font-table font "HVAR")
+           (+ base (hvar-advance-delta font gid (or norm (default-norm font)))))
+          ((and norm (font-table font "gvar")) (varied-advance font gid base norm))
+          (t base))))

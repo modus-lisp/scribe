@@ -179,7 +179,7 @@
     (loop for ch across text for i from 0 do
       (let ((gid (font-glyph-index font (char-code ch))))
         (vector-push-extend
-         (make-glyph-pos :gid gid :x-advance (glyph-advance font gid)
+         (make-glyph-pos :gid gid :x-advance (advance-at font gid)
                          :y-advance 0 :x-offset 0 :y-offset 0 :cluster i) buf)))
     buf))
 
@@ -831,7 +831,7 @@
             (apply-lookup ctx (lookup-offset llist d li) buf)))))
     ;; advances follow the FINAL gids (GSUB may have substituted)
     (loop for g across buf
-          do (setf (glyph-pos-x-advance g) (glyph-advance font (glyph-pos-gid g))))
+          do (setf (glyph-pos-x-advance g) (advance-at font (glyph-pos-gid g))))
     ;; ---- GPOS ----
     (multiple-value-bind (llist idxs) (otl-lookup-indices font "GPOS" tags)
       (when idxs
