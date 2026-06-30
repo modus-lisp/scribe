@@ -1,7 +1,7 @@
 ;;;; shape-test.lisp — shaping gate vs the HarfBuzz oracle.
 ;;;;   ... --eval '(asdf:load-system "scribe")' --load inspect/shape-test.lisp \
 ;;;;       --eval '(scribe.stest:run-all)'
-(defpackage #:scribe.stest (:use #:cl) (:export #:run-all))
+(defpackage #:scribe.stest (:use #:cl) (:export #:run-all #:run-features))
 (in-package #:scribe.stest)
 (defparameter *here* (directory-namestring (or *load-truename* *load-pathname*)))
 
@@ -54,3 +54,96 @@
     (format t "~&shaping: ~d/~d glyph-positions match; ~d/~d sections clean~%"
             pass (+ pass fail) (- secs secfail) secs)
     (dolist (e (nreverse examples)) (format t "    ~a~%" e))))
+
+;;; ---- feature sweep gate (inspect/vectors/shape/features.txt) ----
+;;; Section header: "# <stem> | <feat-csv> | <text>"; rows: gid xa ya xo yo.
+(defparameter *default-feats*
+  '("ccmp" "locl" "rlig" "liga" "calt" "kern" "mark" "mkmk"))
+
+(defun split-csv (s)
+  (let ((out '()) (start 0))
+    (loop for c = (position #\, s :start start)
+          do (push (subseq s start c) out)
+             (if c (setf start (1+ c)) (return)))
+    (remove "" (nreverse out) :test #'string=)))
+
+(defun parse-row5 (line)
+  (let ((vals '()) (start 0))
+    (dotimes (k 5 (nreverse vals))
+      (let ((sp (position #\Space line :start start)))
+        (push (parse-integer line :start start :end sp) vals)
+        (setf start (if sp (1+ sp) (length line)))))))
+
+(defun run-features ()
+  (let ((bykey (make-hash-table :test 'equal))   ; (stem . featcsv) -> (pass fail clean total)
+        (fonts (make-hash-table :test 'equal))
+        (examples '()))
+    ;; entry per key: (full-pass full-fail clean total gid-pass gid-fail)
+    (flet ((acc (key clean) (let ((c (gethash key bykey (list 0 0 0 0 0 0))))
+                              (incf (fourth c))
+                              (when clean (incf (third c)))
+                              (setf (gethash key bykey) c)))
+           (accp (key p f gp gf) (let ((c (gethash key bykey (list 0 0 0 0 0 0))))
+                             (incf (first c) p) (incf (second c) f)
+                             (incf (fifth c) gp) (incf (sixth c) gf)
+                             (setf (gethash key bykey) c))))
+      (with-open-file (s (merge-pathnames "vectors/shape/features.txt" *here*))
+        (let ((stem nil) (featcsv nil) (text nil) (expected '()))
+          (flet ((flush ()
+                   (when stem
+                     (let* ((font (or (gethash stem fonts)
+                                      (setf (gethash stem fonts)
+                                            (scribe:open-font (read-font stem)))))
+                            (feats (append *default-feats* (split-csv featcsv)))
+                            (buf (scribe:shape-run font text :features feats))
+                            (got (loop for g across buf
+                                       collect (list (scribe::glyph-pos-gid g)
+                                                     (scribe::glyph-pos-x-advance g)
+                                                     (scribe::glyph-pos-y-advance g)
+                                                     (scribe::glyph-pos-x-offset g)
+                                                     (scribe::glyph-pos-y-offset g))))
+                            (exp (nreverse expected))
+                            (key (cons stem featcsv)) (clean t))
+                       (if (/= (length got) (length exp))
+                           (progn (setf clean nil)
+                                  (when (< (length examples) 14)
+                                    (push (format nil "~a [~a] ~s: ~d glyphs, oracle ~d"
+                                                  stem featcsv text (length got) (length exp)) examples)))
+                           (loop for g in got for e in exp for ix from 0 do
+                             (let ((gidok (= (first g) (first e))))
+                               (if (equal g e)
+                                   (accp key 1 0 1 0)
+                                   (progn (accp key 0 1 (if gidok 1 0) (if gidok 0 1))
+                                          (setf clean nil)
+                                          (when (< (length examples) 14)
+                                            (push (format nil "~a [~a] ~s @~d: got ~a want ~a"
+                                                          stem featcsv text ix g e) examples)))))))
+                       (acc key clean))
+                     (setf expected '()))))
+            (loop for line = (read-line s nil) while line do
+              (cond ((and (> (length line) 0) (char= (char line 0) #\#))
+                     (flush)
+                     (let* ((b1 (search " | " line))
+                            (b2 (search " | " line :start2 (+ b1 3))))
+                       (setf stem (string-trim " " (subseq line 1 b1))
+                             featcsv (string-trim " " (subseq line (+ b1 3) b2))
+                             text (subseq line (+ b2 3)))))
+                    ((zerop (length line)))
+                    (t (push (parse-row5 line) expected))))
+            (flush)))))
+    ;; report
+    (let ((tp 0) (tf 0) (tc 0) (tt 0) (tgp 0) (tgf 0))
+      (format t "~&== feature sweep vs HarfBuzz ==~%")
+      (format t "  ~22a ~9a  ~13a ~13a ~a~%" "font" "feature" "full-pos" "gid-only" "cases")
+      (let ((keys (sort (loop for k being the hash-keys of bykey collect k)
+                        (lambda (a b) (or (string< (car a) (car b))
+                                          (and (string= (car a) (car b)) (string< (cdr a) (cdr b))))))))
+        (dolist (k keys)
+          (destructuring-bind (p f clean total gp gf) (gethash k bykey)
+            (incf tp p) (incf tf f) (incf tc clean) (incf tt total) (incf tgp gp) (incf tgf gf)
+            (format t "  ~22a ~9a  ~3d/~3d       ~3d/~3d       ~d/~d~%"
+                    (car k) (if (string= (cdr k) "") "(default)" (cdr k))
+                    p (+ p f) gp (+ gp gf) clean total))))
+      (format t "  ----~%  TOTAL  full ~d/~d pos; gid ~d/~d; ~d/~d cases clean~%"
+              tp (+ tp tf) tgp (+ tgp tgf) tc tt)
+      (dolist (e (nreverse examples)) (format t "    ~a~%" e)))))
