@@ -531,6 +531,16 @@ glyph — NOT to whatever prep happened to leave them at."
       (setf (hs-loop h) 1))))
 (def-op #x32 (h op) (shp h op)) (def-op #x33 (h op) (shp h op))
 
+(def-op #x38 (h)                                     ; SHPIX: shift loop points by a
+  ;; pixel AMOUNT along the freedom vector (amount is on top, points below it).
+  (let* ((amount (hpop h)) (dx (mul2.14 amount (hs-fx h))) (dy (mul2.14 amount (hs-fy h)))
+         (z (zone h (hs-zp2 h))))
+    (dotimes (k (hs-loop h))
+      (let ((p (hpop h)))
+        (incf (aref (hz-cur-x z) p) dx) (incf (aref (hz-cur-y z) p) dy)
+        (touch-pt h (hs-zp2 h) p)))
+    (setf (hs-loop h) 1)))
+
 (def-op #x3C (h)                                     ; ALIGNRP
   (let ((rp0 (hs-rp0 h)))
     (dotimes (k (hs-loop h))
