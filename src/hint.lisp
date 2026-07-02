@@ -515,8 +515,10 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
                    (move h (hs-zp2 h) p (- v (gc-cur h (hs-zp2 h) p)))))
 
 ;;; ---- IUP: interpolate untouched points per contour, per axis ----
-(defun iup-axis (h touchbit cur org)
-  "Interpolate untouched (in TOUCHBIT) points of each contour along CUR/ORG accessors."
+(defun iup-axis (h touchbit cur org orus)
+  "Interpolate untouched (in TOUCHBIT) points per contour.  Interior points use the
+ORUS (font-unit) ratio like FreeType; points outside the touched span shift rigidly
+by the nearest touched point's delta (scaled ORG)."
   (let* ((z (zone h 1)) (ends (hs-glyph-ends h)) (start 0) (tou (hz-touch z)))
     (dotimes (c (length ends))
       (let* ((end (aref ends c)) (n (1+ (- end start))))
@@ -527,13 +529,14 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
             (setf touched (nreverse touched))
             (when touched
               (flet ((interp (i a b)                ; move untouched i between touched a,b
-                       (let ((oa (funcall org a)) (ob (funcall org b)) (oi (funcall org i))
+                       (let ((ua (funcall orus a)) (ub (funcall orus b)) (ui (funcall orus i))
                              (ca (funcall cur a)) (cb (funcall cur b)))
                          (funcall cur i
-                                  (cond ((and (<= (min oa ob) oi) (<= oi (max oa ob)))
-                                         (if (= oa ob) ca (+ ca (muldiv (- oi oa) (- cb ca) (- ob oa)))))
-                                        ((<= oi (min oa ob)) (+ oi (- (if (< oa ob) ca cb) (if (< oa ob) oa ob))))
-                                        (t (+ oi (- (if (> oa ob) ca cb) (if (> oa ob) oa ob)))))))))
+                                  (cond ((and (<= (min ua ub) ui) (<= ui (max ua ub)))
+                                         (if (= ua ub) ca (+ ca (muldiv (- ui ua) (- cb ca) (- ub ua)))))
+                                        ((<= ui (min ua ub))
+                                         (+ (funcall org i) (- (if (< ua ub) ca cb) (funcall org (if (< ua ub) a b)))))
+                                        (t (+ (funcall org i) (- (if (> ua ub) ca cb) (funcall org (if (> ua ub) a b))))))))))
                 (if (= 1 (length touched))
                     ;; single touched point: shift whole contour by its delta
                     (let* ((a (car touched)) (delta (- (funcall cur a) (funcall org a))))
@@ -549,9 +552,11 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
                              (if (cdr r) (setf (aref ,(if (= bit 1) '(hz-cur-x z) '(hz-cur-y z)) (first r)) (second r))
                                  (aref ,(if (= bit 1) '(hz-cur-x z) '(hz-cur-y z)) (first r)))))))
   (def-op #x30 (h) (iup-axis h 2 (let ((z (zone h 1))) (lambda (i &optional (v nil vp)) (if vp (setf (aref (hz-cur-y z) i) v) (aref (hz-cur-y z) i))))
-                            (let ((z (zone h 1))) (lambda (i) (aref (hz-org-y z) i)))))  ; IUP[y]
+                            (let ((z (zone h 1))) (lambda (i) (aref (hz-org-y z) i)))
+                            (let ((z (zone h 1))) (lambda (i) (aref (hz-orus-y z) i)))))  ; IUP[y]
   (def-op #x31 (h) (iup-axis h 1 (let ((z (zone h 1))) (lambda (i &optional (v nil vp)) (if vp (setf (aref (hz-cur-x z) i) v) (aref (hz-cur-x z) i))))
-                            (let ((z (zone h 1))) (lambda (i) (aref (hz-org-x z) i))))))  ; IUP[x]
+                            (let ((z (zone h 1))) (lambda (i) (aref (hz-org-x z) i)))
+                            (let ((z (zone h 1))) (lambda (i) (aref (hz-orus-x z) i))))))  ; IUP[x]
 
 ;;; ---- vector setters that need points (SPVTL/SFVTL) + misc ----
 (def-op #x0A (h) (let ((y (hpop h)) (x (hpop h))) (setf (hs-px h) x (hs-py h) y (hs-dpx h) x (hs-dpy h) y)))  ; SPVFS
