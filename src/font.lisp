@@ -23,7 +23,8 @@
   units-per-em num-glyphs num-h-metrics index-to-loc-format
   %cff            ; cached parsed CFF (lazy) for OTTO fonts
   %fvar %avar     ; cached variation axes + avar segment maps (lazy)
-  %gdef)          ; cached parsed GDEF (lazy); :none if absent
+  %gdef           ; cached parsed GDEF (lazy); :none if absent
+  %cmap)          ; cached parsed best cmap subtable (lazy): codepoint -> gid
 
 (defun font-table (font tag-str)
   "Return (values offset length) for TAG-STR, or NIL if absent."
