@@ -574,8 +574,12 @@ by the nearest touched point's delta (scaled ORG)."
                        (let ((ua (funcall orus a)) (ub (funcall orus b)) (ui (funcall orus i))
                              (ca (funcall cur a)) (cb (funcall cur b)))
                          (funcall cur i
+                                  ;; interior: base on the SMALLER-orus reference (as
+                                  ;; FreeType does) so the single MulDiv rounds identically.
                                   (cond ((and (<= (min ua ub) ui) (<= ui (max ua ub)))
-                                         (if (= ua ub) ca (+ ca (muldiv (- ui ua) (- cb ca) (- ub ua)))))
+                                         (cond ((= ua ub) ca)
+                                               ((<= ua ub) (+ ca (muldiv (- ui ua) (- cb ca) (- ub ua))))
+                                               (t (+ cb (muldiv (- ui ub) (- ca cb) (- ua ub))))))
                                         ((<= ui (min ua ub))
                                          (+ (funcall org i) (- (if (< ua ub) ca cb) (funcall org (if (< ua ub) a b)))))
                                         (t (+ (funcall org i) (- (if (> ua ub) ca cb) (funcall org (if (> ua ub) a b))))))))))
