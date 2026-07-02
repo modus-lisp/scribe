@@ -84,6 +84,7 @@ result sign is sign(a*b*c): dividing by a negative c flips it."
 (defstruct hz                                     ; a zone of points
   (cur-x nil) (cur-y nil)                          ; current coords, F26.6 arrays
   (org-x nil) (org-y nil)                          ; original (scaled) coords
+  (orus-x nil) (orus-y nil)                        ; original UNSCALED coords (font units)
   (on nil)                                         ; on-curve flags
   (touch nil))                                     ; touch flags (bit0 x, bit1 y)
 
@@ -352,9 +353,12 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
 
 ;;; ================================================================ glyph hinting
 ;;; ---- coordinate helpers (all F26.6) ----
-(declaim (inline gc-cur gc-org))
+(declaim (inline gc-cur gc-org gc-orus))
 (defun gc-cur (h zp i) (let ((z (zone h zp))) (dot14 (aref (hz-cur-x z) i) (aref (hz-cur-y z) i) (hs-px h) (hs-py h))))
 (defun gc-org (h zp i) (let ((z (zone h zp))) (dot14 (aref (hz-org-x z) i) (aref (hz-org-y z) i) (hs-dpx h) (hs-dpy h))))
+;; dual-projection of the ORIGINAL UNSCALED (font-unit) coords — IP/IUP ratios use
+;; these (like FreeType's `orus`) so precision isn't lost to per-point scale rounding.
+(defun gc-orus (h zp i) (let ((z (zone h zp))) (dot14 (aref (hz-orus-x z) i) (aref (hz-orus-y z) i) (hs-dpx h) (hs-dpy h))))
 (defun move (h zp i dist) (move-point h (zone h zp) i dist))
 (defun touch-pt (h zp i)
   (let ((z (zone h zp)))
@@ -374,29 +378,34 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
                  (total (+ np 4))
                  (cx (make-array total :element-type 'fixnum)) (cy (make-array total :element-type 'fixnum))
                  (ox (make-array total :element-type 'fixnum)) (oy (make-array total :element-type 'fixnum))
+                 (ux (make-array total :element-type 'fixnum)) (uy (make-array total :element-type 'fixnum))
                  (on (make-array total :element-type 'bit)) (tc (make-array total :element-type 'fixnum :initial-element 0))
                  (xmin (s16 d (+ g 2))) (ymax (s16 d (+ g 8))))
             (dotimes (i np)
               (let ((sx (hscale h (aref xs i))) (sy (hscale h (aref ys i))))
                 (setf (aref cx i) sx (aref ox i) sx (aref cy i) sy (aref oy i) sy
+                      (aref ux i) (aref xs i) (aref uy i) (aref ys i)   ; unscaled (font units)
                       (aref on i) (if (logbitp 0 (aref flags i)) 1 0))))
             ;; phantom points (FUnits): pp1 origin, pp2 advance, pp3/pp4 vertical
             (multiple-value-bind (adv lsb) (hmtx-metrics font gid)
               (let* ((p1x (hscale h (- xmin lsb))) (p2x (hscale h (+ (- xmin lsb) adv)))
                      (p3y (hscale h ymax)))
-                (flet ((setp (i x y) (setf (aref cx i) x (aref ox i) x (aref cy i) y (aref oy i) y (aref on i) 1)))
-                  (setp np p1x 0) (setp (+ np 1) p2x 0) (setp (+ np 2) 0 p3y) (setp (+ np 3) 0 0))
+                (flet ((setp (i x y ufx ufy) (setf (aref cx i) x (aref ox i) x (aref cy i) y (aref oy i) y
+                                                   (aref ux i) ufx (aref uy i) ufy (aref on i) 1)))
+                  (setp np p1x 0 (- xmin lsb) 0) (setp (+ np 1) p2x 0 (+ (- xmin lsb) adv) 0)
+                  (setp (+ np 2) 0 p3y 0 ymax) (setp (+ np 3) 0 0 0 0))
                 ;; grid-fit the phantom points' CURRENT position (FT_PIX_ROUND);
                 ;; ORG stays unrounded so IP/MDRP measure the true original metrics.
                 ;; This is what lets IP shift a stem when the advance rounds (2.67->3.00).
                 (flet ((pr (v) (* 64 (floor (+ v 32) 64))))
                   (dotimes (k 4) (let ((i (+ np k))) (setf (aref cx i) (pr (aref cx i)) (aref cy i) (pr (aref cy i))))))))
             (setf (hs-glyph-npts h) np (hs-glyph-ends h) endpts)
-            (let ((glyph (make-hz :cur-x cx :cur-y cy :org-x ox :org-y oy :on on :touch tc))
+            (let ((glyph (make-hz :cur-x cx :cur-y cy :org-x ox :org-y oy :orus-x ux :orus-y uy :on on :touch tc))
                   (mtw (max 4 (1+ (or (getf (parse-maxp1 font) :max-twilight) 4)))))
               (setf (hs-zones h)
                     (vector (make-hz :cur-x (make-array mtw :element-type 'fixnum) :cur-y (make-array mtw :element-type 'fixnum)
                                      :org-x (make-array mtw :element-type 'fixnum) :org-y (make-array mtw :element-type 'fixnum)
+                                     :orus-x (make-array mtw :element-type 'fixnum) :orus-y (make-array mtw :element-type 'fixnum)
                                      :on (make-array mtw :element-type 'bit) :touch (make-array mtw :element-type 'fixnum :initial-element 0))
                             glyph)))
             t))))))
@@ -444,9 +453,10 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
 (def-op #x3F (h) (miap h t))                         ; MIAP[1]
 
 (defun mdrp (h op)
+  ;; flags: bit2 (0x04) round, bit3 (0x08) keep-min-distance, bit4 (0x10) set rp0.
   (let* ((p (hpop h)) (org (- (gc-org h (hs-zp1 h) p) (gc-org h (hs-zp0 h) (hs-rp0 h))))
-         (dist (if (logbitp 3 op) (hround h org) org)))
-    (when (logbitp 2 op)                             ; min distance
+         (dist (if (logbitp 2 op) (hround h org) org)))
+    (when (logbitp 3 op)                             ; min distance
       (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
     (let ((cur-rp0 (gc-cur h (hs-zp0 h) (hs-rp0 h))))
       (move h (hs-zp1 h) p (- (+ cur-rp0 dist) (gc-cur h (hs-zp1 h) p))))
@@ -458,10 +468,10 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
          (org (- (gc-org h (hs-zp1 h) p) (gc-org h (hs-zp0 h) (hs-rp0 h)))))
     (when (/= (hs-zp1 h) 0)                          ; cut-in (non-twilight)
       (when (> (abs (- cvt org)) (hs-cvt-cut-in h)) (setf cvt org)))
-    (let ((dist (if (logbitp 3 op) (hround h cvt) cvt)))
+    (let ((dist (if (logbitp 2 op) (hround h cvt) cvt)))  ; bit2 round, bit3 min-dist
       (when (minusp org) (setf dist (- (abs dist))) )  ; sign follows original
       (unless (minusp org) (setf dist (abs dist)))
-      (when (logbitp 2 op)
+      (when (logbitp 3 op)
         (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
       (let ((cur-rp0 (gc-cur h (hs-zp0 h) (hs-rp0 h))))
         (move h (hs-zp1 h) p (- (+ cur-rp0 dist) (gc-cur h (hs-zp1 h) p))))
@@ -469,12 +479,16 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
 (dotimes (i 32) (setf (aref *ops* (+ #xE0 i)) (lambda (h op) (mirp h op))))  ; MIRP
 
 (def-op #x39 (h)                                     ; IP
+  ;; original ranges/distances use ORUS (font units) like FreeType, so the ratio
+  ;; keeps full precision; current uses the scaled cur coords.  Base = rp1.
   (let* ((ra (hs-rp1 h)) (rb (hs-rp2 h))
-         (oa (gc-org h (hs-zp0 h) ra)) (ob (gc-org h (hs-zp1 h) rb))
-         (ca (gc-cur h (hs-zp0 h) ra)) (cb (gc-cur h (hs-zp1 h) rb)))
+         (oa (gc-orus h (hs-zp0 h) ra)) (ob (gc-orus h (hs-zp1 h) rb))
+         (ca (gc-cur h (hs-zp0 h) ra)) (cb (gc-cur h (hs-zp1 h) rb))
+         (old-range (- ob oa)) (cur-range (- cb ca)))
     (dotimes (k (hs-loop h))
-      (let* ((p (hpop h)) (op (gc-org h (hs-zp2 h) p)) (cp (gc-cur h (hs-zp2 h) p))
-             (new (if (= oa ob) (+ ca (- op oa)) (+ ca (muldiv (- op oa) (- cb ca) (- ob oa))))))
+      (let* ((p (hpop h)) (op (gc-orus h (hs-zp2 h) p)) (cp (gc-cur h (hs-zp2 h) p))
+             (org-dist (- op oa))
+             (new (+ ca (if (zerop old-range) 0 (muldiv org-dist cur-range old-range)))))
         (move h (hs-zp2 h) p (- new cp))))
     (setf (hs-loop h) 1)))
 
