@@ -531,6 +531,23 @@ glyph — NOT to whatever prep happened to leave them at."
       (setf (hs-loop h) 1))))
 (def-op #x32 (h op) (shp h op)) (def-op #x33 (h op) (shp h op))
 
+(defun sh-ref (h op)
+  "The (displacement . zone-of-ref) for SHC/SHZ: like SHP, rp1/zp0 (odd) or rp2/zp1."
+  (multiple-value-bind (rp zref) (if (logbitp 0 op) (values (hs-rp1 h) (hs-zp0 h)) (values (hs-rp2 h) (hs-zp1 h)))
+    (values (- (gc-cur h zref rp) (gc-org h zref rp)) rp zref)))
+(defun shc (h op)                                    ; SHC: shift a whole contour
+  (multiple-value-bind (disp rp zref) (sh-ref h op)
+    (let* ((c (hpop h)) (ends (hs-glyph-ends h))
+           (start (if (zerop c) 0 (1+ (aref ends (1- c))))) (end (aref ends c)))
+      (loop for i from start to end
+            unless (and (= (hs-zp2 h) zref) (= i rp)) do (move h (hs-zp2 h) i disp)))))
+(def-op #x34 (h op) (shc h op)) (def-op #x35 (h op) (shc h op))
+(defun shz (h op)                                    ; SHZ: shift an entire zone
+  (multiple-value-bind (disp rp zref) (sh-ref h op)
+    (let* ((e (hpop h)) (z (zone h e)) (n (length (hz-cur-x z))))
+      (dotimes (i n) (unless (and (= e zref) (= i rp)) (move h e i disp))))))
+(def-op #x36 (h op) (shz h op)) (def-op #x37 (h op) (shz h op))
+
 (def-op #x38 (h)                                     ; SHPIX: shift loop points by a
   ;; pixel AMOUNT along the freedom vector (amount is on top, points below it).
   (let* ((amount (hpop h)) (dx (mul2.14 amount (hs-fx h))) (dy (mul2.14 amount (hs-fy h)))
@@ -605,6 +622,49 @@ by the nearest touched point's delta (scaled ORG)."
                             (let ((z (zone h 1))) (lambda (i) (aref (hz-orus-x z) i))))))  ; IUP[x]
 
 ;;; ---- vector setters that need points (SPVTL/SFVTL) + misc ----
+(defun norm14 (vx vy)
+  "Normalize (vx,vy) F26.6 to an F2.14 unit vector (FreeType Normalize)."
+  (cond ((and (zerop vx) (zerop vy)) (values 16384 0))
+        ((zerop vx) (values 0 (if (minusp vy) -16384 16384)))
+        ((zerop vy) (values (if (minusp vx) -16384 16384) 0))
+        (t (let ((w (isqrt (+ (* vx vx) (* vy vy)))))
+             (values (muldiv vx 16384 w) (muldiv vy 16384 w))))))
+(defun sxvtl (h op set-proj)
+  "SPVTL/SFVTL: vector along (parallel, opcode odd) or perpendicular (even) to the
+line from point A (zp2) to point B (zp1), in current coords.  Sets proj+dual (and
+also freedom for SFVTL forms)."
+  (let* ((pa (hpop h)) (pb (hpop h)) (za (zone h (hs-zp2 h))) (zb (zone h (hs-zp1 h)))
+         (dx (- (aref (hz-cur-x zb) pb) (aref (hz-cur-x za) pa)))
+         (dy (- (aref (hz-cur-y zb) pb) (aref (hz-cur-y za) pa))))
+    (when (evenp op) (psetf dx (- dy) dy dx))        ; perpendicular
+    (multiple-value-bind (ux uy) (norm14 dx dy)
+      (if set-proj (setf (hs-px h) ux (hs-py h) uy (hs-dpx h) ux (hs-dpy h) uy)
+          (setf (hs-fx h) ux (hs-fy h) uy)))))
+(def-op #x06 (h op) (sxvtl h op t))                  ; SPVTL[0] (perpendicular)
+(def-op #x07 (h op) (sxvtl h op t))                  ; SPVTL[1] (parallel)
+(def-op #x08 (h op) (sxvtl h op nil))                ; SFVTL[0] (perpendicular)
+(def-op #x09 (h op) (sxvtl h op nil))                ; SFVTL[1] (parallel)
+(def-op #x0F (h)                                     ; ISECT: move point to line-line intersection
+  (let* ((b1 (hpop h)) (b0 (hpop h)) (a1 (hpop h)) (a0 (hpop h)) (pt (hpop h))
+         (z0 (zone h (hs-zp0 h))) (z1 (zone h (hs-zp1 h))) (z2 (zone h (hs-zp2 h)))
+         (dbx (- (aref (hz-cur-x z0) b1) (aref (hz-cur-x z0) b0)))
+         (dby (- (aref (hz-cur-y z0) b1) (aref (hz-cur-y z0) b0)))
+         (dax (- (aref (hz-cur-x z1) a1) (aref (hz-cur-x z1) a0)))
+         (day (- (aref (hz-cur-y z1) a1) (aref (hz-cur-y z1) a0)))
+         (dx (- (aref (hz-cur-x z0) b0) (aref (hz-cur-x z1) a0)))
+         (dy (- (aref (hz-cur-y z0) b0) (aref (hz-cur-y z1) a0)))
+         (disc (+ (muldiv dax (- dby) 64) (muldiv day dbx 64)))
+         (dot (+ (muldiv dax dbx 64) (muldiv day dby 64))))
+    (if (> (* 19 (abs disc)) (abs dot))
+        (let* ((val (+ (muldiv dx (- dby) 64) (muldiv dy dbx 64)))
+               (rx (muldiv val dax disc)) (ry (muldiv val day disc)))
+          (setf (aref (hz-cur-x z2) pt) (+ (aref (hz-cur-x z1) a0) rx)
+                (aref (hz-cur-y z2) pt) (+ (aref (hz-cur-y z1) a0) ry)))
+        (setf (aref (hz-cur-x z2) pt) (ash (+ (aref (hz-cur-x z1) a0) (aref (hz-cur-x z1) a1)
+                                             (aref (hz-cur-x z0) b0) (aref (hz-cur-x z0) b1)) -2)
+              (aref (hz-cur-y z2) pt) (ash (+ (aref (hz-cur-y z1) a0) (aref (hz-cur-y z1) a1)
+                                             (aref (hz-cur-y z0) b0) (aref (hz-cur-y z0) b1)) -2)))
+    (setf (aref (hz-touch z2) pt) (logior (aref (hz-touch z2) pt) 3))))
 (def-op #x0A (h) (let ((y (hpop h)) (x (hpop h))) (setf (hs-px h) x (hs-py h) y (hs-dpx h) x (hs-dpy h) y)))  ; SPVFS
 (def-op #x0B (h) (let ((y (hpop h)) (x (hpop h))) (setf (hs-fx h) x (hs-fy h) y)))                            ; SFVFS
 (def-op #x0C (h) (hpush h (hs-px h)) (hpush h (hs-py h)))    ; GPV
