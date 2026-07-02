@@ -59,11 +59,27 @@ scaled to F26.6).  Call RUN-FPGM-PREP before hinting glyphs."
     (dotimes (i n) (setf (aref (hs-cvt h) i) (muldiv (aref raw i) (* 64 ppem) upem)))
     h))
 
+;;; The graphics-state slots that make up the interpreter's GS.  FreeType restores
+;;; the whole post-prep GS before every glyph, so a glyph program's changes (round
+;;; mode, SMD, SDB, vectors, ...) never leak into the next glyph.
+(defparameter *gs-slots*
+  '(hs-fx hs-fy hs-px hs-py hs-dpx hs-dpy hs-rp0 hs-rp1 hs-rp2 hs-zp0 hs-zp1 hs-zp2
+    hs-loop hs-round-state hs-round-period hs-round-phase hs-round-threshold
+    hs-min-dist hs-cvt-cut-in hs-sw-cut-in hs-sw-value hs-auto-flip
+    hs-delta-base hs-delta-shift hs-scan-control hs-instruct-control))
+
+(defun snapshot-gs (h)
+  (setf (hs-gs-default h) (mapcar (lambda (s) (funcall s h)) *gs-slots*)))
+(defun restore-gs (h)
+  (loop for s in *gs-slots* for v in (hs-gs-default h)
+        do (funcall (fdefinition `(setf ,s)) v h)))
+
 (defun run-fpgm-prep (h)
   "Run the font program (defines functions) then the control-value program (sets
-graphics state / CVT for this ppem)."
+graphics state / CVT for this ppem), then snapshot the GS as the per-glyph default."
   (let ((fp (table-bytes (hs-font h) "fpgm"))) (when fp (run-program h fp)))
-  (let ((pp (table-bytes (hs-font h) "prep"))) (when pp (run-program h pp))))
+  (let ((pp (table-bytes (hs-font h) "prep"))) (when pp (run-program h pp)))
+  (snapshot-gs h))
 
 ;;; ------------------------------------------------------------- fixed point
 ;;; F26Dot6: px*64.  F2Dot14: unit vector components (16384 = 1.0).
@@ -411,9 +427,11 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
             t))))))
 
 (defun reset-glyph-gs (h)
-  "Per-glyph graphics-state reset (keep prep's round-state/cut-ins; reset the rest)."
-  (setf (hs-fx h) 16384 (hs-fy h) 0 (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0
-        (hs-rp0 h) 0 (hs-rp1 h) 0 (hs-rp2 h) 0 (hs-zp0 h) 1 (hs-zp1 h) 1 (hs-zp2 h) 1 (hs-loop h) 1))
+  "Per-glyph graphics-state reset: restore the whole post-prep GS (FreeType does the
+same), so no glyph program's state changes leak into the next glyph."
+  (if (hs-gs-default h) (restore-gs h)
+      (setf (hs-fx h) 16384 (hs-fy h) 0 (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0
+            (hs-rp0 h) 0 (hs-rp1 h) 0 (hs-rp2 h) 0 (hs-zp0 h) 1 (hs-zp1 h) 1 (hs-zp2 h) 1 (hs-loop h) 1)))
 
 (defun hint-glyph (h gid)
   "Grid-fit GID at the hinter's ppem; return the hinted contours as lists of
