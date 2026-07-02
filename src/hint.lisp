@@ -35,6 +35,13 @@
             (let ((x (logior (ash (aref b (* i 2)) 8) (aref b (1+ (* i 2))))))
               (setf (aref v i) (if (>= x #x8000) (- x #x10000) x))))))))
 
+(defun hmtx-metrics (font gid)
+  "(values advance-width lsb) in FUnits for GID (last advance repeats past nh)."
+  (let* ((d (font-data font)) (off (req-table font "hmtx")) (nh (font-num-h-metrics font)))
+    (if (< gid nh)
+        (values (u16 d (+ off (* gid 4))) (s16 d (+ off (* gid 4) 2)))
+        (values (u16 d (+ off (* (1- nh) 4))) (s16 d (+ off (* nh 4) (* (- gid nh) 2)))))))
+
 ;;; ---- construction ----
 (defun hscale (h funit)
   "Scale a FUnit value to F26.6 pixels at this hinter's ppem."
@@ -90,7 +97,9 @@ graphics state / CVT for this ppem)."
   (round-state :grid) (min-dist 64) (cvt-cut-in 68) (sw-cut-in 0) (sw-value 0)
   (auto-flip t) (delta-base 9) (delta-shift 3) (scan-control 0) (instruct-control 0)
   (round-period 64) (round-phase 0) (round-threshold 32)
-  zones)                                            ; #(twilight glyph)
+  zones                                             ; #(twilight glyph)
+  (glyph-ends nil) (glyph-npts 0)                   ; contour end indices + #real points
+  (gs-default nil))                                 ; graphics state snapshot after prep
 
 (define-condition hint-unimplemented (error)
   ((op :initarg :op :reader hint-op))
@@ -325,3 +334,207 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
       (setf (hs-code h) save-code (hs-pc h) save-pc))))
 (def-op #x2B (h) (call-fn h (hpop h)))                                 ; CALL
 (def-op #x2A (h) (let ((fn (hpop h)) (n (hpop h))) (dotimes (i n) (call-fn h fn)))) ; LOOPCALL
+
+;;; ------------------------------------------------------- glyph loading
+(defun glyph-instructions (font gid)
+  "The per-glyph instruction byte stream (or NIL) for a simple glyph."
+  (multiple-value-bind (off len) (loca-offset font gid)
+    (when (plusp len)
+      (let* ((d (font-data font)) (g (+ (req-table font "glyf") off)) (ncont (s16 d g)))
+        (when (>= ncont 0)
+          (let* ((p (+ g 10 (* 2 ncont))) (ilen (u16 d p)))
+            (when (plusp ilen) (subseq d (+ p 2) (+ p 2 ilen)))))))))
+
+;;; ================================================================ glyph hinting
+;;; ---- coordinate helpers (all F26.6) ----
+(declaim (inline gc-cur gc-org))
+(defun gc-cur (h zp i) (let ((z (zone h zp))) (dot14 (aref (hz-cur-x z) i) (aref (hz-cur-y z) i) (hs-px h) (hs-py h))))
+(defun gc-org (h zp i) (let ((z (zone h zp))) (dot14 (aref (hz-org-x z) i) (aref (hz-org-y z) i) (hs-dpx h) (hs-dpy h))))
+(defun move (h zp i dist) (move-point h (zone h zp) i dist))
+(defun touch-pt (h zp i)
+  (let ((z (zone h zp)))
+    (when (/= (hs-fx h) 0) (setf (aref (hz-touch z) i) (logior (aref (hz-touch z) i) 1)))
+    (when (/= (hs-fy h) 0) (setf (aref (hz-touch z) i) (logior (aref (hz-touch z) i) 2)))))
+
+;;; ---- load a glyph into zone 1 (+ 4 phantom points), zone 0 = twilight ----
+(defun load-glyph-zone (h gid)
+  "Populate zone 1 with GID's scaled points + phantom points; zone 0 twilight."
+  (let* ((font (hs-font h)) (d (font-data font)))
+    (multiple-value-bind (off len) (loca-offset font gid)
+      (when (zerop len) (return-from load-glyph-zone nil))
+      (let* ((g (+ (req-table font "glyf") off)) (ncont (s16 d g)))
+        (when (< ncont 0) (return-from load-glyph-zone :composite))
+        (multiple-value-bind (xs ys flags endpts) (%simple-glyph d g ncont)
+          (let* ((np (if (zerop ncont) 0 (1+ (aref endpts (1- ncont)))))
+                 (total (+ np 4))
+                 (cx (make-array total :element-type 'fixnum)) (cy (make-array total :element-type 'fixnum))
+                 (ox (make-array total :element-type 'fixnum)) (oy (make-array total :element-type 'fixnum))
+                 (on (make-array total :element-type 'bit)) (tc (make-array total :element-type 'fixnum :initial-element 0))
+                 (xmin (s16 d (+ g 2))) (ymax (s16 d (+ g 8))))
+            (dotimes (i np)
+              (let ((sx (hscale h (aref xs i))) (sy (hscale h (aref ys i))))
+                (setf (aref cx i) sx (aref ox i) sx (aref cy i) sy (aref oy i) sy
+                      (aref on i) (if (logbitp 0 (aref flags i)) 1 0))))
+            ;; phantom points (FUnits): pp1 origin, pp2 advance, pp3/pp4 vertical
+            (multiple-value-bind (adv lsb) (hmtx-metrics font gid)
+              (let* ((p1x (hscale h (- xmin lsb))) (p2x (hscale h (+ (- xmin lsb) adv)))
+                     (p3y (hscale h ymax)))
+                (flet ((setp (i x y) (setf (aref cx i) x (aref ox i) x (aref cy i) y (aref oy i) y (aref on i) 1)))
+                  (setp np p1x 0) (setp (+ np 1) p2x 0) (setp (+ np 2) 0 p3y) (setp (+ np 3) 0 0))))
+            (setf (hs-glyph-npts h) np (hs-glyph-ends h) endpts)
+            (let ((glyph (make-hz :cur-x cx :cur-y cy :org-x ox :org-y oy :on on :touch tc))
+                  (mtw (max 4 (1+ (or (getf (parse-maxp1 font) :max-twilight) 4)))))
+              (setf (hs-zones h)
+                    (vector (make-hz :cur-x (make-array mtw :element-type 'fixnum) :cur-y (make-array mtw :element-type 'fixnum)
+                                     :org-x (make-array mtw :element-type 'fixnum) :org-y (make-array mtw :element-type 'fixnum)
+                                     :on (make-array mtw :element-type 'bit) :touch (make-array mtw :element-type 'fixnum :initial-element 0))
+                            glyph)))
+            t))))))
+
+(defun reset-glyph-gs (h)
+  "Per-glyph graphics-state reset (keep prep's round-state/cut-ins; reset the rest)."
+  (setf (hs-fx h) 16384 (hs-fy h) 0 (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0
+        (hs-rp0 h) 0 (hs-rp1 h) 0 (hs-rp2 h) 0 (hs-zp0 h) 1 (hs-zp1 h) 1 (hs-zp2 h) 1 (hs-loop h) 1))
+
+(defun hint-glyph (h gid)
+  "Grid-fit GID at the hinter's ppem; return the hinted contours as lists of
+(x y on) in px (or NIL for empty / :composite for unsupported composites)."
+  (let ((loaded (load-glyph-zone h gid)))
+    (unless (eq loaded t) (return-from hint-glyph loaded))
+    (reset-glyph-gs h)
+    (let ((ins (glyph-instructions (hs-font h) gid)))
+      (when ins (setf (hs-sp h) 0) (run-program h ins)))
+    ;; extract hinted contour points
+    (let* ((z (zone h 1)) (ends (hs-glyph-ends h)) (out '()) (start 0))
+      (dotimes (c (length ends) (nreverse out))
+        (let ((end (aref ends c)) (pts '()))
+          (loop for i from start to end do
+            (push (list (/ (aref (hz-cur-x z) i) 64.0) (/ (aref (hz-cur-y z) i) 64.0) (= 1 (aref (hz-on z) i))) pts))
+          (push (nreverse pts) out) (setf start (1+ end)))))))
+
+;;; ---- point-mover opcodes ----
+(def-op #x2E (h)                                     ; MDAP[0] (touch only)
+  (let ((p (hpop h))) (touch-pt h (hs-zp0 h) p) (setf (hs-rp0 h) p (hs-rp1 h) p)))
+(def-op #x2F (h)                                     ; MDAP[1] (round to grid)
+  (let* ((p (hpop h)) (cur (gc-cur h (hs-zp0 h) p)))
+    (move h (hs-zp0 h) p (- (hround h cur) cur)) (setf (hs-rp0 h) p (hs-rp1 h) p)))
+
+(defun miap (h round)
+  (let* ((n (hpop h)) (p (hpop h)) (zp (hs-zp0 h)) (cvt (aref (hs-cvt h) n)))
+    (when (zerop zp)                                 ; twilight: set position from CVT
+      (let ((z (zone h 0)))
+        (setf (aref (hz-org-x z) p) (mul2.14 cvt (hs-px h)) (aref (hz-org-y z) p) (mul2.14 cvt (hs-py h))
+              (aref (hz-cur-x z) p) (aref (hz-org-x z) p) (aref (hz-cur-y z) p) (aref (hz-org-y z) p))))
+    (let ((cur (gc-cur h zp p)))
+      (when round
+        (when (> (abs (- cvt cur)) (hs-cvt-cut-in h)) (setf cvt cur))
+        (setf cvt (hround h cvt)))
+      (move h zp p (- cvt cur)) (setf (hs-rp0 h) p (hs-rp1 h) p))))
+(def-op #x3E (h) (miap h nil))                       ; MIAP[0]
+(def-op #x3F (h) (miap h t))                         ; MIAP[1]
+
+(defun mdrp (h op)
+  (let* ((p (hpop h)) (org (- (gc-org h (hs-zp1 h) p) (gc-org h (hs-zp0 h) (hs-rp0 h))))
+         (dist (if (logbitp 3 op) (hround h org) org)))
+    (when (logbitp 2 op)                             ; min distance
+      (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
+    (let ((cur-rp0 (gc-cur h (hs-zp0 h) (hs-rp0 h))))
+      (move h (hs-zp1 h) p (- (+ cur-rp0 dist) (gc-cur h (hs-zp1 h) p))))
+    (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) p) (when (logbitp 4 op) (setf (hs-rp0 h) p))))
+(dotimes (i 32) (setf (aref *ops* (+ #xC0 i)) (lambda (h op) (mdrp h op))))  ; MDRP
+
+(defun mirp (h op)
+  (let* ((n (hpop h)) (p (hpop h)) (cvt (aref (hs-cvt h) n))
+         (org (- (gc-org h (hs-zp1 h) p) (gc-org h (hs-zp0 h) (hs-rp0 h)))))
+    (when (/= (hs-zp1 h) 0)                          ; cut-in (non-twilight)
+      (when (> (abs (- cvt org)) (hs-cvt-cut-in h)) (setf cvt org)))
+    (let ((dist (if (logbitp 3 op) (hround h cvt) cvt)))
+      (when (minusp org) (setf dist (- (abs dist))) )  ; sign follows original
+      (unless (minusp org) (setf dist (abs dist)))
+      (when (logbitp 2 op)
+        (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
+      (let ((cur-rp0 (gc-cur h (hs-zp0 h) (hs-rp0 h))))
+        (move h (hs-zp1 h) p (- (+ cur-rp0 dist) (gc-cur h (hs-zp1 h) p))))
+      (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) p) (when (logbitp 4 op) (setf (hs-rp0 h) p)))))
+(dotimes (i 32) (setf (aref *ops* (+ #xE0 i)) (lambda (h op) (mirp h op))))  ; MIRP
+
+(def-op #x39 (h)                                     ; IP
+  (let* ((ra (hs-rp1 h)) (rb (hs-rp2 h))
+         (oa (gc-org h (hs-zp0 h) ra)) (ob (gc-org h (hs-zp1 h) rb))
+         (ca (gc-cur h (hs-zp0 h) ra)) (cb (gc-cur h (hs-zp1 h) rb)))
+    (dotimes (k (hs-loop h))
+      (let* ((p (hpop h)) (op (gc-org h (hs-zp2 h) p)) (cp (gc-cur h (hs-zp2 h) p))
+             (new (if (= oa ob) (+ ca (- op oa)) (+ ca (muldiv (- op oa) (- cb ca) (- ob oa))))))
+        (move h (hs-zp2 h) p (- new cp))))
+    (setf (hs-loop h) 1)))
+
+(defun shp (h op)                                    ; SHP[a]
+  (multiple-value-bind (rp zref) (if (logbitp 0 op) (values (hs-rp1 h) (hs-zp0 h)) (values (hs-rp2 h) (hs-zp1 h)))
+    (let ((disp (- (gc-cur h zref rp) (gc-org h zref rp))))
+      (dotimes (k (hs-loop h)) (move h (hs-zp2 h) (hpop h) disp))
+      (setf (hs-loop h) 1))))
+(def-op #x32 (h op) (shp h op)) (def-op #x33 (h op) (shp h op))
+
+(def-op #x3C (h)                                     ; ALIGNRP
+  (let ((rp0 (hs-rp0 h)))
+    (dotimes (k (hs-loop h))
+      (let ((p (hpop h))) (move h (hs-zp1 h) p (- (gc-cur h (hs-zp0 h) rp0) (gc-cur h (hs-zp1 h) p)))))
+    (setf (hs-loop h) 1)))
+
+(def-op #x46 (h) (hpush h (gc-cur h (hs-zp2 h) (hpop h))))   ; GC[0] current
+(def-op #x47 (h) (hpush h (gc-org h (hs-zp2 h) (hpop h))))   ; GC[1] original
+(def-op #x49 (h) (let ((b (hpop h)) (a (hpop h)))            ; MD[0] current distance
+                   (hpush h (- (gc-cur h (hs-zp0 h) a) (gc-cur h (hs-zp1 h) b)))))
+(def-op #x4A (h) (let ((b (hpop h)) (a (hpop h)))            ; MD[1] original distance
+                   (hpush h (- (gc-org h (hs-zp0 h) a) (gc-org h (hs-zp1 h) b)))))
+(def-op #x48 (h) (let ((v (hpop h)) (p (hpop h)))            ; SCFS
+                   (move h (hs-zp2 h) p (- v (gc-cur h (hs-zp2 h) p)))))
+
+;;; ---- IUP: interpolate untouched points per contour, per axis ----
+(defun iup-axis (h touchbit cur org)
+  "Interpolate untouched (in TOUCHBIT) points of each contour along CUR/ORG accessors."
+  (let* ((z (zone h 1)) (ends (hs-glyph-ends h)) (start 0) (tou (hz-touch z)))
+    (dotimes (c (length ends))
+      (let* ((end (aref ends c)) (n (1+ (- end start))))
+        (when (plusp n)
+          ;; collect touched indices in this contour
+          (let ((touched '()))
+            (loop for i from start to end when (logbitp (if (= touchbit 1) 0 1) (aref tou i)) do (push i touched))
+            (setf touched (nreverse touched))
+            (when touched
+              (flet ((interp (i a b)                ; move untouched i between touched a,b
+                       (let ((oa (funcall org a)) (ob (funcall org b)) (oi (funcall org i))
+                             (ca (funcall cur a)) (cb (funcall cur b)))
+                         (funcall cur i
+                                  (cond ((and (<= (min oa ob) oi) (<= oi (max oa ob)))
+                                         (if (= oa ob) ca (+ ca (muldiv (- oi oa) (- cb ca) (- ob oa)))))
+                                        ((<= oi (min oa ob)) (+ oi (- (if (< oa ob) ca cb) (if (< oa ob) oa ob))))
+                                        (t (+ oi (- (if (> oa ob) ca cb) (if (> oa ob) oa ob)))))))))
+                (if (= 1 (length touched))
+                    ;; single touched point: shift whole contour by its delta
+                    (let* ((a (car touched)) (delta (- (funcall cur a) (funcall org a))))
+                      (loop for i from start to end unless (= i a) do (funcall cur i (+ (funcall org i) delta))))
+                    ;; between each consecutive touched pair (with wraparound)
+                    (loop for (a b) on (append touched (list (car touched)))
+                          while b do
+                            (loop for k from 1 below (mod (- b a) n)   ; untouched strictly between a..b (cyclic)
+                                  for i = (+ start (mod (+ (- a start) k) n))
+                                  do (interp i a b))))))))
+        (setf start (1+ end))))))
+(macrolet ((cur-acc (bit) `(lambda (&rest r) (let ((z (zone h 1)))
+                             (if (cdr r) (setf (aref ,(if (= bit 1) '(hz-cur-x z) '(hz-cur-y z)) (first r)) (second r))
+                                 (aref ,(if (= bit 1) '(hz-cur-x z) '(hz-cur-y z)) (first r)))))))
+  (def-op #x30 (h) (iup-axis h 2 (let ((z (zone h 1))) (lambda (i &optional (v nil vp)) (if vp (setf (aref (hz-cur-y z) i) v) (aref (hz-cur-y z) i))))
+                            (let ((z (zone h 1))) (lambda (i) (aref (hz-org-y z) i)))))  ; IUP[y]
+  (def-op #x31 (h) (iup-axis h 1 (let ((z (zone h 1))) (lambda (i &optional (v nil vp)) (if vp (setf (aref (hz-cur-x z) i) v) (aref (hz-cur-x z) i))))
+                            (let ((z (zone h 1))) (lambda (i) (aref (hz-org-x z) i))))))  ; IUP[x]
+
+;;; ---- vector setters that need points (SPVTL/SFVTL) + misc ----
+(def-op #x0A (h) (let ((y (hpop h)) (x (hpop h))) (setf (hs-px h) x (hs-py h) y (hs-dpx h) x (hs-dpy h) y)))  ; SPVFS
+(def-op #x0B (h) (let ((y (hpop h)) (x (hpop h))) (setf (hs-fx h) x (hs-fy h) y)))                            ; SFVFS
+(def-op #x0C (h) (hpush h (hs-px h)) (hpush h (hs-py h)))    ; GPV
+(def-op #x0D (h) (hpush h (hs-fx h)) (hpush h (hs-fy h)))    ; GFV
+(def-op #x25 (h) (hpush h (aref (hs-stack h) (- (hs-sp h) 1 (hpop h)))))  ; CINDEX
+(def-op #x26 (h) (let* ((k (hpop h)) (i (- (hs-sp h) k)) (v (aref (hs-stack h) i)))  ; MINDEX
+                   (loop for j from i below (1- (hs-sp h)) do (setf (aref (hs-stack h) j) (aref (hs-stack h) (1+ j))))
+                   (decf (hs-sp h)) (hpush h v)))
