@@ -276,10 +276,11 @@ rule is min-distance, applied by MDRP/MIRP — not here.)"
                        (hs-fx h) 0 (hs-fy h) 16384))                     ; SVTCA[y]
 (def-op #x01 (h) (setf (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0
                        (hs-fx h) 16384 (hs-fy h) 0))                     ; SVTCA[x]
-(def-op #x02 (h) (setf (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0)) ; SPVTCA[x]
-(def-op #x03 (h) (setf (hs-px h) 0 (hs-py h) 16384 (hs-dpx h) 0 (hs-dpy h) 16384)) ; SPVTCA[y]
-(def-op #x04 (h) (setf (hs-fx h) 16384 (hs-fy h) 0))                     ; SFVTCA[x]
-(def-op #x05 (h) (setf (hs-fx h) 0 (hs-fy h) 16384))                     ; SFVTCA[y]
+;; opcode&1 selects axis: 1=x, 0=y (so 0x02/0x04 are the Y variants).
+(def-op #x02 (h) (setf (hs-px h) 0 (hs-py h) 16384 (hs-dpx h) 0 (hs-dpy h) 16384)) ; SPVTCA[y]
+(def-op #x03 (h) (setf (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0)) ; SPVTCA[x]
+(def-op #x04 (h) (setf (hs-fx h) 0 (hs-fy h) 16384))                     ; SFVTCA[y]
+(def-op #x05 (h) (setf (hs-fx h) 16384 (hs-fy h) 0))                     ; SFVTCA[x]
 (def-op #x0E (h) (setf (hs-fx h) (hs-px h) (hs-fy h) (hs-py h)))         ; SFVTPV
 (def-op #x10 (h) (setf (hs-rp0 h) (hpop h)))                             ; SRP0
 (def-op #x11 (h) (setf (hs-rp1 h) (hpop h)))                             ; SRP1
@@ -437,11 +438,14 @@ rounding of subtracting two independently-scaled coords.  Twilight falls back to
             t))))))
 
 (defun reset-glyph-gs (h)
-  "Per-glyph graphics-state reset: restore the whole post-prep GS (FreeType does the
-same), so no glyph program's state changes leak into the next glyph."
-  (if (hs-gs-default h) (restore-gs h)
-      (setf (hs-fx h) 16384 (hs-fy h) 0 (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0
-            (hs-rp0 h) 0 (hs-rp1 h) 0 (hs-rp2 h) 0 (hs-zp0 h) 1 (hs-zp1 h) 1 (hs-zp2 h) 1 (hs-loop h) 1)))
+  "Per-glyph graphics-state reset, matching FreeType: the policy fields (round mode,
+cut-ins, min-distance, delta base/shift, flip, ...) come from the post-prep snapshot
+so a glyph program's changes don't leak; but the vectors, zone pointers, reference
+points and loop are reset to the FIXED default (x-axis, zone 1, rp 0, loop 1) every
+glyph — NOT to whatever prep happened to leave them at."
+  (when (hs-gs-default h) (restore-gs h))
+  (setf (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0 (hs-fx h) 16384 (hs-fy h) 0
+        (hs-rp0 h) 0 (hs-rp1 h) 0 (hs-rp2 h) 0 (hs-zp0 h) 1 (hs-zp1 h) 1 (hs-zp2 h) 1 (hs-loop h) 1))
 
 (defun hint-glyph (h gid)
   "Grid-fit GID at the hinter's ppem; return the hinted contours as lists of
