@@ -233,16 +233,18 @@ rule is min-distance, applied by MDRP/MIRP — not here.)"
 (defun delta-step (h arg)
   (let ((bits (logand arg #xF)))
     (* (if (< bits 8) (- bits 8) (- bits 7)) (ash 64 (- (hs-delta-shift h))))))
+;;; Stack (top-down after n): the cvt/point INDEX is nearer the top, the exception
+;;; ARG is below it (spec: "... arg1 idx1 n").  So pop index first, then arg.
 (defun do-deltac (h base-off)
   (let ((n (hpop h)) (base (+ (hs-delta-base h) base-off)))
     (dotimes (i n)
-      (let ((arg (hpop h)) (idx (hpop h)))
+      (let ((idx (hpop h)) (arg (hpop h)))
         (when (= (hs-ppem h) (+ base (ash arg -4)))
           (incf (aref (hs-cvt h) idx) (delta-step h arg)))))))
 (defun do-deltap (h base-off)
   (let ((n (hpop h)) (base (+ (hs-delta-base h) base-off)))
     (dotimes (i n)
-      (let ((arg (hpop h)) (pt (hpop h)))
+      (let ((pt (hpop h)) (arg (hpop h)))
         (when (= (hs-ppem h) (+ base (ash arg -4)))
           (move-point h (zone h (hs-zp0 h)) pt (delta-step h arg)))))))
 (def-op #x73 (h) (do-deltac h 0))                                       ; DELTAC1
@@ -287,7 +289,7 @@ rule is min-distance, applied by MDRP/MIRP — not here.)"
 (def-op #x19 (h) (setf (hs-round-state h) :grid)   (set-round-period h 64 32 32)) ; RTHG (phase=half)
 (def-op #x3D (h) (setf (hs-round-state h) :grid)   (set-round-period h 32 0 16))  ; RTDG
 (def-op #x7A (h) (setf (hs-round-state h) :off))                                  ; ROFF
-(def-op #x7C (h) (setf (hs-round-state h) :grid)   (set-round-period h 64 0 64))  ; RUTG (up)
+(def-op #x7C (h) (setf (hs-round-state h) :grid)   (set-round-period h 64 0 63))  ; RUTG (up=ceil: thr=period-1)
 (def-op #x7D (h) (setf (hs-round-state h) :grid)   (set-round-period h 64 0 0))   ; RDTG (down)
 
 ;;; ---- flow control: IF/ELSE/EIF, function defs, calls, jumps ----
