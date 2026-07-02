@@ -30,4 +30,5 @@ gamma-correct linear-light compositing. No FFI, no FreeType, no HarfBuzz."
      (:file "raster")    ; DONE: analytic-coverage rasterizer (quad + cubic)
      (:file "shape")     ; glyph-pos struct
      (:file "otl")       ; DONE: GSUB/GPOS shaping — kerning + ligatures (strong-tier)
+     (:file "hint")      ; WIP: TrueType bytecode hinting (grid-fit small text)
      (:file "match")))))  ; DONE: CSS font-family matching over the shipped faces
