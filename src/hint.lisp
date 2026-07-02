@@ -375,6 +375,16 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
 ;; dual-projection of the ORIGINAL UNSCALED (font-unit) coords — IP/IUP ratios use
 ;; these (like FreeType's `orus`) so precision isn't lost to per-point scale rounding.
 (defun gc-orus (h zp i) (let ((z (zone h zp))) (dot14 (aref (hz-orus-x z) i) (aref (hz-orus-y z) i) (hs-dpx h) (hs-dpy h))))
+(defun orus-dist (h zp1 p zp0 rp0)
+  "Original projected distance (p relative to rp0) as FreeType's MDRP/MIRP measure it:
+scale the ORUS (font-unit) difference ONCE, then dual-project — avoids the extra
+rounding of subtracting two independently-scaled coords.  Twilight falls back to org."
+  (if (or (zerop zp0) (zerop zp1))
+      (- (gc-org h zp1 p) (gc-org h zp0 rp0))
+      (let* ((z1 (zone h zp1)) (z0 (zone h zp0))
+             (dx (- (aref (hz-orus-x z1) p) (aref (hz-orus-x z0) rp0)))
+             (dy (- (aref (hz-orus-y z1) p) (aref (hz-orus-y z0) rp0))))
+        (dot14 (hscale h dx) (hscale h dy) (hs-dpx h) (hs-dpy h)))))
 (defun move (h zp i dist) (move-point h (zone h zp) i dist))
 (defun touch-pt (h zp i)
   (let ((z (zone h zp)))
@@ -472,7 +482,7 @@ same), so no glyph program's state changes leak into the next glyph."
 
 (defun mdrp (h op)
   ;; flags: bit2 (0x04) round, bit3 (0x08) keep-min-distance, bit4 (0x10) set rp0.
-  (let* ((p (hpop h)) (org (- (gc-org h (hs-zp1 h) p) (gc-org h (hs-zp0 h) (hs-rp0 h))))
+  (let* ((p (hpop h)) (org (orus-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h)))
          (dist (if (logbitp 2 op) (hround h org) org)))
     (when (logbitp 3 op)                             ; min distance
       (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
@@ -483,7 +493,7 @@ same), so no glyph program's state changes leak into the next glyph."
 
 (defun mirp (h op)
   (let* ((n (hpop h)) (p (hpop h)) (cvt (aref (hs-cvt h) n))
-         (org (- (gc-org h (hs-zp1 h) p) (gc-org h (hs-zp0 h) (hs-rp0 h)))))
+         (org (orus-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h))))
     (when (/= (hs-zp1 h) 0)                          ; cut-in (non-twilight)
       (when (> (abs (- cvt org)) (hs-cvt-cut-in h)) (setf cvt org)))
     (let ((dist (if (logbitp 2 op) (hround h cvt) cvt)))  ; bit2 round, bit3 min-dist
