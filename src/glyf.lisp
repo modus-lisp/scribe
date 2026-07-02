@@ -132,18 +132,26 @@
     (nreverse out)))
 
 ;;; ---- cmap dispatch: pick the best Unicode subtable, map codepoint -> gid ----
+(defun font-cmap (font)
+  "The parsed best-available cmap subtable (codepoint -> gid), built once and
+cached on the font.  Rebuilding this per lookup — which the old code did — reads
+the whole cmap for every character measured, quadratic on text-heavy pages."
+  (or (font-%cmap font)
+      (setf (font-%cmap font)
+            (let ((subs (cmap-subtables font)) (d (font-data font)))
+              (flet ((find-sub (pid eid fmt) (find-if (lambda (s) (and (= (first s) pid) (= (second s) eid)
+                                                                       (= (third s) fmt))) subs)))
+                (let ((best (or (find-sub 3 10 12) (find-sub 0 10 12)   ; full Unicode
+                                (find-sub 3 1 4)   (find-sub 0 3 4)     ; BMP
+                                (find-sub 0 4 12)  (find-sub 0 6 12)
+                                (first subs))))
+                  (or (when best
+                        (ecase (third best)
+                          (4  (parse-cmap-4  d (fourth best)))
+                          (6  (parse-cmap-6  d (fourth best)))
+                          (12 (parse-cmap-12 d (fourth best)))))
+                      (make-hash-table :test 'eql))))))))   ; empty (no cmap) -> parsed once
+
 (defun font-glyph-index (font codepoint)
   "Map a Unicode CODEPOINT to a glyph id via the best available cmap subtable."
-  (let ((subs (cmap-subtables font)) (d (font-data font)))
-    (flet ((find-sub (pid eid fmt) (find-if (lambda (s) (and (= (first s) pid) (= (second s) eid)
-                                                             (= (third s) fmt))) subs)))
-      (let* ((best (or (find-sub 3 10 12) (find-sub 0 10 12)   ; full Unicode
-                       (find-sub 3 1 4)   (find-sub 0 3 4)     ; BMP
-                       (find-sub 0 4 12)  (find-sub 0 6 12)
-                       (first subs)))
-             (ht (when best
-                   (ecase (third best)
-                     (4  (parse-cmap-4  d (fourth best)))
-                     (6  (parse-cmap-6  d (fourth best)))
-                     (12 (parse-cmap-12 d (fourth best)))))))
-        (or (and ht (gethash codepoint ht)) 0)))))
+  (or (gethash codepoint (font-cmap font)) 0))
