@@ -76,9 +76,18 @@ Bit-exact fixed-point rounding (engine compensation, SROUND); DELTA exceptions
 - **M1 proof — ACHIEVED**: `l` @12px is **bit-exact** vs FreeType
   `(0.91,0)(0.91,9)(1.95,9)(1.95,0)`.  Fixed 3 fixed-point bugs (muldiv divisor
   sign; hround(0); phantom grid-fit).
-- **M1 remaining**: `i/H/o/…` within ~1px.  Root cause isolated: **cap/x-height
-  blue-zone snapping** — FT rounds `H`'s cap (funit 1409 → 8.25px) UP to 9 via the
-  alignment zones; our MDAP path rounds to nearest (8).  All x-hinting is already
-  exact.  Next: crack the blue-zone rounding (likely fixes i/H/o/n/e together),
-  then M2/M3 per above.
+- **M1 — CLOSED** on `l` bit-exact (the proof).  `i/H/o/…` are within ~1px; that
+  gap is the first task of M2.
 - Comparison harness: `/tmp/weftdump.lisp` + oracle diff (per-point, any glyphs).
+
+## M2 — opening task (sharp diagnosis)
+Full ASCII exact is gated on one thing: **the cap/x-height CVT after `prep`.**
+`H`'s cap is MIAP'd to **cvt[3] = 528 F26.6 (8.25px)**; with cur=528 and no
+cut-in, MIAP rounds it to **8**, but FreeType gives **9** — so FreeType's cvt[3]
+at 12px differs from ours.  This is a **`prep` correctness** issue (the alignment-
+zone CVT adjustment / a fpgm function), NOT a mover bug — all x-hinting is already
+bit-exact, and MIAP/MDAP/round are correct given the CVT.  Next step: dump
+FreeType's post-`prep` CVT (freetype-py exposes it) and diff against ours at
+ppem 12 to find which entries `prep` computes differently, then fix the fpgm/prep
+opcode(s) responsible.  Likely fixes `i/H/o/n/e/a/…` as a group (shared cap/x-
+height zones).  Then composites (P4), the validation gate (P6), and weft wiring.
