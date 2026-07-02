@@ -360,13 +360,79 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
 
 ;;; ------------------------------------------------------- glyph loading
 (defun glyph-instructions (font gid)
-  "The per-glyph instruction byte stream (or NIL) for a simple glyph."
+  "The per-glyph instruction byte stream (or NIL), for a simple or composite glyph."
   (multiple-value-bind (off len) (loca-offset font gid)
     (when (plusp len)
       (let* ((d (font-data font)) (g (+ (req-table font "glyf") off)) (ncont (s16 d g)))
-        (when (>= ncont 0)
-          (let* ((p (+ g 10 (* 2 ncont))) (ilen (u16 d p)))
-            (when (plusp ilen) (subseq d (+ p 2) (+ p 2 ilen)))))))))
+        (if (>= ncont 0)
+            (let* ((p (+ g 10 (* 2 ncont))) (ilen (u16 d p)))
+              (when (plusp ilen) (subseq d (+ p 2) (+ p 2 ilen))))
+            ;; composite: instructions follow the components iff any component has
+            ;; WE_HAVE_INSTRUCTIONS (0x100).  parse-composite-components returns the
+            ;; byte offset just past the last component.
+            (multiple-value-bind (comps p) (parse-composite-components d g)
+              (when (some (lambda (comp) (logbitp 8 (second comp))) comps)
+                (let ((ilen (u16 d p)))
+                  (when (plusp ilen) (subseq d (+ p 2) (+ p 2 ilen)))))))))))
+
+;;; ---- composite glyphs: components + (optional) composite instructions ----
+(defun parse-composite-components (d g)
+  "Parse a composite glyph header at byte offset G into a list of components, each
+(cgid flags dx-or-p1 dy-or-p2 a b c e) — 2x2 transform in F2.14, args in FUnits."
+  (let ((p (+ g 10)) (out '()) (more t))
+    (loop while more do
+      (let* ((flags (u16 d p)) (cgid (u16 d (+ p 2))) (dx 0) (dy 0)
+             (a 16384) (b 0) (c 0) (e 16384))
+        (incf p 4)
+        (if (logbitp 0 flags)                              ; ARG_1_AND_2_ARE_WORDS
+            (progn (setf dx (s16 d p) dy (s16 d (+ p 2))) (incf p 4))
+            (progn (setf dx (let ((v (u8 d p))) (if (>= v 128) (- v 256) v))
+                         dy (let ((v (u8 d (1+ p)))) (if (>= v 128) (- v 256) v))) (incf p 2)))
+        (flet ((f214 (o) (let ((v (u16 d o))) (if (>= v #x8000) (- v #x10000) v))))
+          (cond ((logbitp 3 flags) (setf a (f214 p) e a) (incf p 2))                 ; WE_HAVE_A_SCALE
+                ((logbitp 6 flags) (setf a (f214 p) e (f214 (+ p 2))) (incf p 4))     ; X_AND_Y_SCALE
+                ((logbitp 7 flags) (setf a (f214 p) b (f214 (+ p 2))                  ; TWO_BY_TWO
+                                         c (f214 (+ p 4)) e (f214 (+ p 6))) (incf p 8))))
+        (push (list cgid flags dx dy a b c e) out)
+        (setf more (logbitp 5 flags))))                    ; MORE_COMPONENTS
+    (values (nreverse out) p)))                            ; P now points past components
+
+(defun glyph-points (h gid)
+  "Merged points for a simple OR composite GID: (values ux uy cx cy on endpts).
+UX/UY are original FUnit coords, CX/CY scaled F26.6 (component xy-offsets grid-fit
+per ROUND_XY_TO_GRID); components recurse + carry the 2x2 transform."
+  (let* ((font (hs-font h)) (d (font-data font)))
+    (multiple-value-bind (off len) (loca-offset font gid)
+      (if (zerop len) (values #() #() #() #() #() #())
+          (let* ((g (+ (req-table font "glyf") off)) (ncont (s16 d g)))
+            (if (>= ncont 0)
+                (multiple-value-bind (xs ys flags endpts) (%simple-glyph d g ncont)
+                  (let* ((np (length xs)) (cx (make-array np)) (cy (make-array np)) (on (make-array np)))
+                    (dotimes (i np)
+                      (setf (aref cx i) (hscale h (aref xs i)) (aref cy i) (hscale h (aref ys i))
+                            (aref on i) (if (logbitp 0 (aref flags i)) 1 0)))
+                    (values xs ys cx cy on endpts)))
+                (let ((uxs '()) (uys '()) (cxs '()) (cys '()) (ons '()) (ends '()) (base 0))
+                  (dolist (comp (parse-composite-components d g))
+                    (destructuring-bind (cgid flags dx dy a b c e) comp
+                      (let ((rxy (logbitp 2 flags)) (xy (logbitp 1 flags)))
+                        ;; component is HINTED standalone, then transformed + placed
+                        (multiple-value-bind (ccx ccy cux cuy con cend) (hint-subglyph h cgid)
+                          (let* ((n (length ccx))
+                                 (ox (if xy (let ((s (hscale h dx))) (if rxy (* 64 (floor (+ s 32) 64)) s)) 0))
+                                 (oy (if xy (let ((s (hscale h dy))) (if rxy (* 64 (floor (+ s 32) 64)) s)) 0)))
+                            (dotimes (i n)
+                              (let ((x (aref cux i)) (y (aref cuy i)) (px (aref ccx i)) (py (aref ccy i)))
+                                (push (+ (round (+ (* a x) (* c y)) 16384) (if xy dx 0)) uxs)
+                                (push (+ (round (+ (* b x) (* e y)) 16384) (if xy dy 0)) uys)
+                                (push (+ (mul2.14 px a) (mul2.14 py c) ox) cxs)
+                                (push (+ (mul2.14 px b) (mul2.14 py e) oy) cys)
+                                (push (aref con i) ons)))
+                            (loop for ce across cend do (push (+ base ce) ends))
+                            (incf base n))))))
+                  (values (coerce (nreverse uxs) 'vector) (coerce (nreverse uys) 'vector)
+                          (coerce (nreverse cxs) 'vector) (coerce (nreverse cys) 'vector)
+                          (coerce (nreverse ons) 'vector) (coerce (nreverse ends) 'vector)))))))))
 
 ;;; ================================================================ glyph hinting
 ;;; ---- coordinate helpers (all F26.6) ----
@@ -394,14 +460,14 @@ rounding of subtracting two independently-scaled coords.  Twilight falls back to
 
 ;;; ---- load a glyph into zone 1 (+ 4 phantom points), zone 0 = twilight ----
 (defun load-glyph-zone (h gid)
-  "Populate zone 1 with GID's scaled points + phantom points; zone 0 twilight."
+  "Populate zone 1 with GID's scaled points + phantom points; zone 0 twilight.
+Handles simple AND composite glyphs (components merged via GLYPH-POINTS)."
   (let* ((font (hs-font h)) (d (font-data font)))
     (multiple-value-bind (off len) (loca-offset font gid)
       (when (zerop len) (return-from load-glyph-zone nil))
-      (let* ((g (+ (req-table font "glyf") off)) (ncont (s16 d g)))
-        (when (< ncont 0) (return-from load-glyph-zone :composite))
-        (multiple-value-bind (xs ys flags endpts) (%simple-glyph d g ncont)
-          (let* ((np (if (zerop ncont) 0 (1+ (aref endpts (1- ncont)))))
+      (let ((g (+ (req-table font "glyf") off)))
+        (multiple-value-bind (gux guy gcx gcy gon endpts) (glyph-points h gid)
+          (let* ((np (length gux))
                  (total (+ np 4))
                  (cx (make-array total :element-type 'fixnum)) (cy (make-array total :element-type 'fixnum))
                  (ox (make-array total :element-type 'fixnum)) (oy (make-array total :element-type 'fixnum))
@@ -409,10 +475,10 @@ rounding of subtracting two independently-scaled coords.  Twilight falls back to
                  (on (make-array total :element-type 'bit)) (tc (make-array total :element-type 'fixnum :initial-element 0))
                  (xmin (s16 d (+ g 2))) (ymax (s16 d (+ g 8))))
             (dotimes (i np)
-              (let ((sx (hscale h (aref xs i))) (sy (hscale h (aref ys i))))
-                (setf (aref cx i) sx (aref ox i) sx (aref cy i) sy (aref oy i) sy
-                      (aref ux i) (aref xs i) (aref uy i) (aref ys i)   ; unscaled (font units)
-                      (aref on i) (if (logbitp 0 (aref flags i)) 1 0))))
+              (setf (aref cx i) (aref gcx i) (aref ox i) (aref gcx i)
+                    (aref cy i) (aref gcy i) (aref oy i) (aref gcy i)
+                    (aref ux i) (aref gux i) (aref uy i) (aref guy i)
+                    (aref on i) (aref gon i)))
             ;; phantom points (FUnits): pp1 origin, pp2 advance, pp3/pp4 vertical
             (multiple-value-bind (adv lsb) (hmtx-metrics font gid)
               (let* ((p1x (hscale h (- xmin lsb))) (p2x (hscale h (+ (- xmin lsb) adv)))
@@ -463,6 +529,26 @@ glyph — NOT to whatever prep happened to leave them at."
             (push (list (/ (aref (hz-cur-x z) i) 64.0) (/ (aref (hz-cur-y z) i) 64.0) (= 1 (aref (hz-on z) i))) pts))
           (push (nreverse pts) out) (setf start (1+ end)))))))
 
+(defun hint-subglyph (h gid)
+  "Hint GID standalone (own zone + instructions), returning its hinted real points as
+(values cur-x cur-y orus-x orus-y on endpts) — used to place composite components.
+Saves/restores the shared VM's zone + program state so it can nest."
+  (let ((sz (hs-zones h)) (se (hs-glyph-ends h)) (sn (hs-glyph-npts h))
+        (sc (hs-code h)) (sp (hs-pc h)) (ss (hs-sp h)))
+    (unwind-protect
+         (if (eq (load-glyph-zone h gid) t)
+             (progn
+               (reset-glyph-gs h)
+               (let ((ins (glyph-instructions (hs-font h) gid)))
+                 (when ins (setf (hs-sp h) 0) (run-program h ins)))
+               (let* ((z (zone h 1)) (np (hs-glyph-npts h)))
+                 (values (subseq (hz-cur-x z) 0 np) (subseq (hz-cur-y z) 0 np)
+                         (subseq (hz-orus-x z) 0 np) (subseq (hz-orus-y z) 0 np)
+                         (subseq (hz-on z) 0 np) (copy-seq (hs-glyph-ends h)))))
+             (values #() #() #() #() #() #()))
+      (setf (hs-zones h) sz (hs-glyph-ends h) se (hs-glyph-npts h) sn
+            (hs-code h) sc (hs-pc h) sp (hs-sp h) ss))))
+
 ;;; ---- point-mover opcodes ----
 (def-op #x2E (h)                                     ; MDAP[0] (touch only)
   (let ((p (hpop h))) (touch-pt h (hs-zp0 h) p) (setf (hs-rp0 h) p (hs-rp1 h) p)))
@@ -509,6 +595,20 @@ glyph — NOT to whatever prep happened to leave them at."
         (move h (hs-zp1 h) p (- (+ cur-rp0 dist) (gc-cur h (hs-zp1 h) p))))
       (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) p) (when (logbitp 4 op) (setf (hs-rp0 h) p)))))
 (dotimes (i 32) (setf (aref *ops* (+ #xE0 i)) (lambda (h op) (mirp h op))))  ; MIRP
+
+(defun msirp (h op)                                  ; MSIRP: move point to a stack distance from rp0
+  (let ((distance (hpop h)) (point (hpop h)))
+    (when (zerop (hs-zp1 h))                          ; twilight: seed point at rp0 + distance
+      (let ((z0 (zone h (hs-zp0 h))) (z1 (zone h 0)) (rp0 (hs-rp0 h)))
+        (setf (aref (hz-org-x z1) point) (+ (aref (hz-org-x z0) rp0) (mul2.14 distance (hs-fx h)))
+              (aref (hz-org-y z1) point) (+ (aref (hz-org-y z0) rp0) (mul2.14 distance (hs-fy h)))
+              (aref (hz-cur-x z1) point) (aref (hz-org-x z1) point)
+              (aref (hz-cur-y z1) point) (aref (hz-org-y z1) point))))
+    (let ((cur-dist (- (gc-cur h (hs-zp1 h) point) (gc-cur h (hs-zp0 h) (hs-rp0 h)))))
+      (move h (hs-zp1 h) point (- distance cur-dist)))
+    (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) point)
+    (when (logbitp 0 op) (setf (hs-rp0 h) point))))
+(def-op #x3A (h op) (msirp h op)) (def-op #x3B (h op) (msirp h op))
 
 (def-op #x39 (h)                                     ; IP
   ;; original ranges/distances use ORUS (font units) like FreeType, so the ratio
