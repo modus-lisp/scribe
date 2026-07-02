@@ -66,3 +66,19 @@ opcode. (Verified: `l`@12px → stem y 0.00→9.00, ~1px wide.)
 Bit-exact fixed-point rounding (engine compensation, SROUND); DELTA exceptions
 (per-ppem tweaks, needed for exact small-size match); composites; performance
 (→ per-(gid,ppem) cache). Grayscale smooth only, not ClearType.
+
+## Status (banked checkpoint)
+- **P0 oracle** — done (`inspect/hint-oracle.py`, v35-pinned point ground truth).
+- **P1 tables** — done (maxp1, cvt, fpgm/prep/glyph instructions).
+- **P2 interpreter core** — done; runs LiberationSans `fpgm` (71 fns) + `prep` clean.
+- **P3 glyph pipeline + movers** — done; MDAP/MIAP/MDRP/MIRP/IP/IUP/SHP/GC/MD/SCFS
+  + phantom points.
+- **M1 proof — ACHIEVED**: `l` @12px is **bit-exact** vs FreeType
+  `(0.91,0)(0.91,9)(1.95,9)(1.95,0)`.  Fixed 3 fixed-point bugs (muldiv divisor
+  sign; hround(0); phantom grid-fit).
+- **M1 remaining**: `i/H/o/…` within ~1px.  Root cause isolated: **cap/x-height
+  blue-zone snapping** — FT rounds `H`'s cap (funit 1409 → 8.25px) UP to 9 via the
+  alignment zones; our MDAP path rounds to nearest (8).  All x-hinting is already
+  exact.  Next: crack the blue-zone rounding (likely fixes i/H/o/n/e together),
+  then M2/M3 per above.
+- Comparison harness: `/tmp/weftdump.lisp` + oracle diff (per-point, any glyphs).
