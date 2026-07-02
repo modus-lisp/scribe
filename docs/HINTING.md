@@ -80,7 +80,48 @@ Bit-exact fixed-point rounding (engine compensation, SROUND); DELTA exceptions
   gap is the first task of M2.
 - Comparison harness: `/tmp/weftdump.lisp` + oracle diff (per-point, any glyphs).
 
-## M2 — opening task (sharp diagnosis)
+## M2 — SUBSTANTIALLY DONE (full ASCII point-exact)
+The cap/x-height diagnosis was half-right (it *was* a prep bug) but the actual root
+causes were opcode/semantics bugs, found by reading FreeType's post-prep CVT out of
+`TT_Size` via `/proc/self/mem` (freetype-py doesn't expose it).  Fixes, each
+oracle-gated:
+- **RUTG** (round-up-to-grid) used super-round threshold 64; ceil's threshold is
+  `period-1 = 63`, so `round_up(0)` returned 64 (a pixel gained).  Broke the cap/
+  x-height CVTs computed in prep's fpgm helper.
+- **DELTAC/DELTAP pair order**: the cvt/point INDEX is nearer the stack top than the
+  exception spec; we popped them swapped, so every per-ppem exception hit the wrong
+  entry / never matched → cap-height & x-height CVT deltas never fired at 12px.
+  (Post-prep CVT now bit-exact vs FreeType.)
+- **MDRP/MIRP round vs min-distance bits**: bit2 (0x04)=round, bit3 (0x08)=min-dist;
+  we had them swapped.
+- **IP + IUP interior use `orus`** (original font-unit coords), like FreeType, so the
+  interpolation ratio keeps sub-pixel precision (scaled `org` loses it); IUP bases on
+  the smaller-orus reference.
+- **MDRP/MIRP original distance from `orus`** (scale the font-unit delta once) instead
+  of subtracting two independently-scaled coords (double-round).
+- **Per-glyph GS reset**: vectors/rp/zp/loop reset to the fixed x-axis default every
+  glyph (policy fields — round mode, cut-ins, delta — restored from the post-prep
+  snapshot).  Prep here leaves the vectors on the y axis, so glyphs that DELTAP the
+  advance before any SVTCA (v/M/A/w/…) were moving it in y.
+- **SPVTCA/SFVTCA axis bit** (0x02–0x05) was inverted.
+- Opcodes added: **SHPIX, MSIRP, SPVTL/SFVTL, ISECT, SHC/SHZ**.
+
+**Exact counts (printable ASCII, 94 glyphs), LiberationSans:** ppem7 87, 8 86, 9 87,
+10 83, 11 89, 12 90, 14 91, 16 90.  Every remaining miss is a single 1/64px (0.016px)
+interpolation-rounding edge case (leading hypothesis: a touched-vs-untouched
+classification difference in a couple of curve control points).
+
+**P4 composites — implemented**: components hinted standalone then transformed +
+placed (ROUND_XY_TO_GRID) and the composite's own instructions run.  Bases always
+exact; accented Latin-1 29/52 exact @12px (some accents 1px off — the standalone
+component lsb/advance shift bleeds into the composite offset; refinement pending).
+
+**Second font — DejaVuSans**: ~63–65/94 @ppem7–16.  Non-diagonal glyphs largely
+exact; diagonal glyphs (/ \ A w y …) that drive a projection vector through twilight
+points + SPVTL are still off (the SPVTL/twilight cascade yields a near-vertical
+projection that amplifies MIRP moves) — the leading open item.
+
+## M2 — original opening task (sharp diagnosis, kept for history)
 Full ASCII exact is gated on one thing: **the cap/x-height CVT after `prep`.**
 `H`'s cap is MIAP'd to **cvt[3] = 528 F26.6 (8.25px)**; with cur=528 and no
 cut-in, MIAP rounds it to **8**, but FreeType gives **9** — so FreeType's cvt[3]
