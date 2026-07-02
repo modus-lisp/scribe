@@ -70,9 +70,11 @@ graphics state / CVT for this ppem)."
 (declaim (inline f26.6 muldiv))
 (defun f26.6 (px) (round (* px 64)))
 (defun muldiv (a b c)
-  "round(a*b/c) with .5 rounding away from zero — FreeType's FT_MulDiv."
+  "round(a*b/c) with .5 rounding away from zero — FreeType's FT_MulDiv.  The
+result sign is sign(a*b*c): dividing by a negative c flips it."
   (if (zerop c) 0
-      (let* ((s (if (minusp (* a b)) -1 1)) (n (+ (abs (* a b)) (floor (abs c) 2))))
+      (let* ((ab (* a b)) (s (if (minusp (* ab c)) -1 1))
+             (n (+ (abs ab) (floor (abs c) 2))))
         (* s (floor n (abs c))))))
 (declaim (inline mul2.14 dot14))
 (defun mul2.14 (a b) (muldiv a b 16384))           ; F26.6 * F2.14 -> F26.6
@@ -112,14 +114,15 @@ graphics state / CVT for this ppem)."
 
 ;;; ---- rounding engine (round-state -> round an F26.6 distance) ----
 (defun hround (h dist)
-  "Round F26.6 DIST per the graphics-state round mode, preserving sign and (per
-spec) never rounding a nonzero distance to zero."
+  "Round F26.6 DIST per the graphics-state round mode (FT_Round_Super), preserving
+sign.  A negative result clamps to 0.  (The 'don't collapse a nonzero distance'
+rule is min-distance, applied by MDRP/MIRP — not here.)"
   (if (eq (hs-round-state h) :off) dist
       (let* ((per (hs-round-period h)) (ph (hs-round-phase h)) (thr (hs-round-threshold h))
              (sign (if (minusp dist) -1 1)) (d (abs dist))
              (r (+ (* (floor (+ (- d ph) thr) per) per) ph)))
         (when (minusp r) (setf r 0))
-        (* sign (if (zerop r) per r)))))
+        (* sign r))))
 
 (defun set-round-period (h period phase threshold)
   (setf (hs-round-period h) period (hs-round-phase h) phase (hs-round-threshold h) threshold))
@@ -380,7 +383,12 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
               (let* ((p1x (hscale h (- xmin lsb))) (p2x (hscale h (+ (- xmin lsb) adv)))
                      (p3y (hscale h ymax)))
                 (flet ((setp (i x y) (setf (aref cx i) x (aref ox i) x (aref cy i) y (aref oy i) y (aref on i) 1)))
-                  (setp np p1x 0) (setp (+ np 1) p2x 0) (setp (+ np 2) 0 p3y) (setp (+ np 3) 0 0))))
+                  (setp np p1x 0) (setp (+ np 1) p2x 0) (setp (+ np 2) 0 p3y) (setp (+ np 3) 0 0))
+                ;; grid-fit the phantom points' CURRENT position (FT_PIX_ROUND);
+                ;; ORG stays unrounded so IP/MDRP measure the true original metrics.
+                ;; This is what lets IP shift a stem when the advance rounds (2.67->3.00).
+                (flet ((pr (v) (* 64 (floor (+ v 32) 64))))
+                  (dotimes (k 4) (let ((i (+ np k))) (setf (aref cx i) (pr (aref cx i)) (aref cy i) (pr (aref cy i))))))))
             (setf (hs-glyph-npts h) np (hs-glyph-ends h) endpts)
             (let ((glyph (make-hz :cur-x cx :cur-y cy :org-x ox :org-y oy :on on :touch tc))
                   (mtw (max 4 (1+ (or (getf (parse-maxp1 font) :max-twilight) 4)))))
