@@ -77,10 +77,21 @@
    darkening). 1.0 = geometric/linear-correct; <1 thickens & darkens strokes so
    text reads solid instead of washed-out; >1 lightens. ~0.7 ≈ macOS weight.")
 
+(defparameter *blend-gamma* nil
+  "Compositing space for coverage.  NIL: linear light via the exact sRGB LUT
+(gamma-correct — right for images and gradients).  A number G: composite in
+power-G gamma space.  Text renderers blend glyphs with an intermediate gamma
+(~1.6) — linear light (LUT, ~2.2) leaves dark-on-light edges washed-out, while
+naive sRGB (G=1.0) is too heavy; the browser sits between.  Bind a G for glyphs.")
+
+(declaim (inline %clamp8))
+(defun %clamp8 (v) (declare (type double-float v)) (max 0 (min 255 (the fixnum (round v)))))
+
 (declaim (inline blend-coverage))
 (defun blend-coverage (cv x y coverage fg)
-  "Composite FG (list R G B, 8-bit) over pixel (X,Y) at COVERAGE in [0,1],
-   blending in linear light.  COVERAGE 1 = solid FG, 0 = untouched."
+  "Composite FG (list R G B, 8-bit) over pixel (X,Y) at COVERAGE in [0,1].
+   Blends in linear light, or in power-*BLEND-GAMMA* space when that is set
+   (glyphs).  COVERAGE 1 = solid FG, 0 = untouched."
   (declare (type canvas cv) (type fixnum x y) (type double-float coverage))
   (when (and (>= x 0) (>= y 0) (< x (canvas-width cv)) (< y (canvas-height cv))
              (> coverage 0d0))
@@ -89,12 +100,25 @@
            (a (if (= *stem-darkening* 1d0) (min 1d0 coverage)
                   (expt (min 1d0 coverage) *stem-darkening*)))
            (ia (- 1d0 a))
-           (fr (srgb->linear (first fg)))
-           (fg* (srgb->linear (second fg)))
-           (fb (srgb->linear (third fg))))
-      (setf (aref px i)       (lin->srgb8 (+ (* ia (srgb->linear (aref px i)))       (* a fr)))
-            (aref px (+ i 1)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 1)))) (* a fg*)))
-            (aref px (+ i 2)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 2)))) (* a fb))))))
+           (g *blend-gamma*))
+      (if (null g)
+          (let ((fr (srgb->linear (first fg)))
+                (fg* (srgb->linear (second fg)))
+                (fb (srgb->linear (third fg))))
+            (setf (aref px i)       (lin->srgb8 (+ (* ia (srgb->linear (aref px i)))       (* a fr)))
+                  (aref px (+ i 1)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 1)))) (* a fg*)))
+                  (aref px (+ i 2)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 2)))) (* a fb)))))
+          (let* ((gg (float g 1d0))
+                 (ig (/ 1d0 gg))
+                 (bl0 (expt (/ (float (aref px i) 1d0) 255d0) gg))
+                 (bl1 (expt (/ (float (aref px (+ i 1)) 1d0) 255d0) gg))
+                 (bl2 (expt (/ (float (aref px (+ i 2)) 1d0) 255d0) gg))
+                 (fl0 (expt (/ (float (first fg) 1d0) 255d0) gg))
+                 (fl1 (expt (/ (float (second fg) 1d0) 255d0) gg))
+                 (fl2 (expt (/ (float (third fg) 1d0) 255d0) gg)))
+            (setf (aref px i)       (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia bl0) (* a fl0))) ig)))
+                  (aref px (+ i 1)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia bl1) (* a fl1))) ig)))
+                  (aref px (+ i 2)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia bl2) (* a fl2))) ig))))))))
   (values))
 
 (defun fill-coverage-span (cv x y coverages fg &optional (n (length coverages)))
