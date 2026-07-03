@@ -10,7 +10,7 @@
    ;; (later) font.lisp / shape.lisp / raster.lisp / atlas.lisp contracts
    #:open-font #:font-glyph-index #:font-units-per-em
    #:shape-run
-   #:rasterize-glyph
+   #:rasterize-glyph #:rasterize-outline
    ;; font matching + metric accessors (match.lisp)
    #:match-font
    #:font-ascent #:font-descent #:font-line-gap))
