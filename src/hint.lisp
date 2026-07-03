@@ -727,18 +727,23 @@ by the nearest touched point's delta (scaled ORG)."
             (setf touched (nreverse touched))
             (when touched
               (flet ((interp (i a b)                ; move untouched i between touched a,b
-                       (let ((ua (funcall orus a)) (ub (funcall orus b)) (ui (funcall orus i))
-                             (ca (funcall cur a)) (cb (funcall cur b)))
-                         (funcall cur i
-                                  ;; interior: base on the SMALLER-orus reference (as
-                                  ;; FreeType does) so the single MulDiv rounds identically.
-                                  (cond ((and (<= (min ua ub) ui) (<= ui (max ua ub)))
-                                         (cond ((= ua ub) ca)
-                                               ((<= ua ub) (+ ca (muldiv (- ui ua) (- cb ca) (- ub ua))))
-                                               (t (+ cb (muldiv (- ui ub) (- ca cb) (- ua ub))))))
-                                        ((<= ui (min ua ub))
-                                         (+ (funcall org i) (- (if (< ua ub) ca cb) (funcall org (if (< ua ub) a b)))))
-                                        (t (+ (funcall org i) (- (if (> ua ub) ca cb) (funcall org (if (> ua ub) a b))))))))))
+                       ;; Exact port of FreeType iup_worker_interpolate_: sort refs by
+                       ;; ORUS; the boundary classification uses SCALED org (so points
+                       ;; sharing a ref's scaled position shift with it); the interior
+                       ;; ratio uses ORUS (font units) via DivFix->MulFix.
+                       (multiple-value-bind (r1 r2)
+                           (if (<= (funcall orus a) (funcall orus b)) (values a b) (values b a))
+                         (let* ((orus1 (funcall orus r1)) (orus2 (funcall orus r2))
+                                (org1 (funcall org r1)) (org2 (funcall org r2))
+                                (cur1 (funcall cur r1)) (cur2 (funcall cur r2))
+                                (xi (funcall org i)))
+                           (funcall cur i
+                                    (cond ((<= xi org1) (+ xi (- cur1 org1)))
+                                          ((>= xi org2) (+ xi (- cur2 org2)))
+                                          ((or (= cur1 cur2) (= orus1 orus2)) cur1)
+                                          (t (+ cur1 (muldiv (- (funcall orus i) orus1)
+                                                             (muldiv (- cur2 cur1) 65536 (- orus2 orus1))
+                                                             65536)))))))))
                 (if (= 1 (length touched))
                     ;; single touched point: shift whole contour by its delta
                     (let* ((a (car touched)) (delta (- (funcall cur a) (funcall org a))))
