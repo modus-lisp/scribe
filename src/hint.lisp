@@ -466,16 +466,28 @@ per ROUND_XY_TO_GRID); components recurse + carry the 2x2 transform."
 ;; dual-projection of the ORIGINAL UNSCALED (font-unit) coords — IP/IUP ratios use
 ;; these (like FreeType's `orus`) so precision isn't lost to per-point scale rounding.
 (defun gc-orus (h zp i) (let ((z (zone h zp))) (dot14 (aref (hz-orus-x z) i) (aref (hz-orus-y z) i) (hs-dpx h) (hs-dpy h))))
+;; FreeType measures point-to-point distances by projecting the DIFFERENCE vector
+;; once (PROJECT / DUALPROJ), not by subtracting two independently-projected points
+;; — those differ by a rounding unit and cascade into 1-unit mover errors.
+(defun cur-dist (h zpp p zpq q)
+  "PROJECT(cur[p] - cur[q])."
+  (let ((zp (zone h zpp)) (zq (zone h zpq)))
+    (dot14 (- (aref (hz-cur-x zp) p) (aref (hz-cur-x zq) q))
+           (- (aref (hz-cur-y zp) p) (aref (hz-cur-y zq) q)) (hs-px h) (hs-py h))))
+(defun org-dist (h zpp p zpq q)
+  "DUALPROJ(org[p] - org[q]) on the scaled original coords (FreeType's MDRP/MIRP org)."
+  (let ((zp (zone h zpp)) (zq (zone h zpq)))
+    (dot14 (- (aref (hz-org-x zp) p) (aref (hz-org-x zq) q))
+           (- (aref (hz-org-y zp) p) (aref (hz-org-y zq) q)) (hs-dpx h) (hs-dpy h))))
 (defun orus-dist (h zp1 p zp0 rp0)
-  "Original projected distance (p relative to rp0) as FreeType's MDRP/MIRP measure it:
-scale the ORUS (font-unit) difference ONCE, then dual-project — avoids the extra
-rounding of subtracting two independently-scaled coords.  Twilight falls back to org."
+  "Original projected distance from the ORUS (font-unit) difference, scaled once then
+dual-projected.  Twilight falls back to scaled org."
   (if (or (zerop zp0) (zerop zp1))
-      (- (gc-org h zp1 p) (gc-org h zp0 rp0))
-      (let* ((z1 (zone h zp1)) (z0 (zone h zp0))
-             (dx (- (aref (hz-orus-x z1) p) (aref (hz-orus-x z0) rp0)))
-             (dy (- (aref (hz-orus-y z1) p) (aref (hz-orus-y z0) rp0))))
-        (dot14 (hscale h dx) (hscale h dy) (hs-dpx h) (hs-dpy h)))))
+      (org-dist h zp1 p zp0 rp0)
+      (let ((z1 (zone h zp1)) (z0 (zone h zp0)))
+        (dot14 (hscale h (- (aref (hz-orus-x z1) p) (aref (hz-orus-x z0) rp0)))
+               (hscale h (- (aref (hz-orus-y z1) p) (aref (hz-orus-y z0) rp0)))
+               (hs-dpx h) (hs-dpy h)))))
 (defun move (h zp i dist) (move-point h (zone h zp) i dist))
 (defun touch-pt (h zp i)
   (let ((z (zone h zp)))
@@ -600,8 +612,7 @@ Saves/restores the shared VM's zone + program state so it can nest."
          (dist (if (logbitp 2 op) (hround h org) org)))
     (when (logbitp 3 op)                             ; min distance
       (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
-    (let ((cur-rp0 (gc-cur h (hs-zp0 h) (hs-rp0 h))))
-      (move h (hs-zp1 h) p (- (+ cur-rp0 dist) (gc-cur h (hs-zp1 h) p))))
+    (move h (hs-zp1 h) p (- dist (cur-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h))))
     (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) p) (when (logbitp 4 op) (setf (hs-rp0 h) p))))
 (dotimes (i 32) (setf (aref *ops* (+ #xC0 i)) (lambda (h op) (mdrp h op))))  ; MDRP
 
@@ -615,8 +626,7 @@ Saves/restores the shared VM's zone + program state so it can nest."
       (unless (minusp org) (setf dist (abs dist)))
       (when (logbitp 3 op)
         (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
-      (let ((cur-rp0 (gc-cur h (hs-zp0 h) (hs-rp0 h))))
-        (move h (hs-zp1 h) p (- (+ cur-rp0 dist) (gc-cur h (hs-zp1 h) p))))
+      (move h (hs-zp1 h) p (- dist (cur-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h))))
       (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) p) (when (logbitp 4 op) (setf (hs-rp0 h) p)))))
 (dotimes (i 32) (setf (aref *ops* (+ #xE0 i)) (lambda (h op) (mirp h op))))  ; MIRP
 
