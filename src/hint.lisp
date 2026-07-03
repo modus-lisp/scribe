@@ -611,26 +611,35 @@ Saves/restores the shared VM's zone + program state so it can nest."
 (def-op #x3E (h) (miap h nil))                       ; MIAP[0]
 (def-op #x3F (h) (miap h t))                         ; MIAP[1]
 
+(defun min-distance (dist org mindist)
+  "FreeType MDRP/MIRP minimum-distance clamp: keep DIST at least MINDIST in ORG's
+direction (asymmetric — based on ORG's sign, not |dist|)."
+  (if (>= org 0)
+      (if (< dist mindist) mindist dist)
+      (if (> dist (- mindist)) (- mindist) dist)))
+
 (defun mdrp (h op)
   ;; flags: bit2 (0x04) round, bit3 (0x08) keep-min-distance, bit4 (0x10) set rp0.
   (let* ((p (hpop h)) (org (orus-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h)))
          (dist (if (logbitp 2 op) (hround h org) org)))
-    (when (logbitp 3 op)                             ; min distance
-      (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
+    (when (logbitp 3 op) (setf dist (min-distance dist org (hs-min-dist h))))
     (move h (hs-zp1 h) p (- dist (cur-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h))))
     (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) p) (when (logbitp 4 op) (setf (hs-rp0 h) p))))
 (dotimes (i 32) (setf (aref *ops* (+ #xC0 i)) (lambda (h op) (mdrp h op))))  ; MDRP
 
 (defun mirp (h op)
+  ;; FreeType order: auto-flip cvt to org's sign FIRST, THEN the control-value cut-in
+  ;; (same-zone), round, and min-distance.
   (let* ((n (hpop h)) (p (hpop h)) (cvt (aref (hs-cvt h) n))
          (org (orus-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h))))
-    (when (/= (hs-zp1 h) 0)                          ; cut-in (non-twilight)
-      (when (> (abs (- cvt org)) (hs-cvt-cut-in h)) (setf cvt org)))
-    (let ((dist (if (logbitp 2 op) (hround h cvt) cvt)))  ; bit2 round, bit3 min-dist
-      (when (minusp org) (setf dist (- (abs dist))) )  ; sign follows original
-      (unless (minusp org) (setf dist (abs dist)))
-      (when (logbitp 3 op)
-        (when (< (abs dist) (hs-min-dist h)) (setf dist (if (minusp org) (- (hs-min-dist h)) (hs-min-dist h)))))
+    (when (and (hs-auto-flip h) (minusp (* org cvt))) (setf cvt (- cvt)))
+    (let ((dist (if (logbitp 2 op)
+                    (progn (when (and (= (hs-zp0 h) (hs-zp1 h))
+                                      (> (abs (- cvt org)) (hs-cvt-cut-in h)))
+                             (setf cvt org))
+                           (hround h cvt))
+                    cvt)))
+      (when (logbitp 3 op) (setf dist (min-distance dist org (hs-min-dist h))))
       (move h (hs-zp1 h) p (- dist (cur-dist h (hs-zp1 h) p (hs-zp0 h) (hs-rp0 h))))
       (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) p) (when (logbitp 4 op) (setf (hs-rp0 h) p)))))
 (dotimes (i 32) (setf (aref *ops* (+ #xE0 i)) (lambda (h op) (mirp h op))))  ; MIRP
