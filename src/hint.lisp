@@ -671,17 +671,21 @@ direction (asymmetric — based on ORG's sign, not |dist|)."
         (move h (hs-zp2 h) p (- new cp))))
     (setf (hs-loop h) 1)))
 
-(defun shp (h op)                                    ; SHP[a]
-  (multiple-value-bind (rp zref) (if (logbitp 0 op) (values (hs-rp1 h) (hs-zp0 h)) (values (hs-rp2 h) (hs-zp1 h)))
-    (let ((disp (- (gc-cur h zref rp) (gc-org h zref rp))))
-      (dotimes (k (hs-loop h)) (move h (hs-zp2 h) (hpop h) disp))
-      (setf (hs-loop h) 1))))
-(def-op #x32 (h op) (shp h op)) (def-op #x33 (h op) (shp h op))
-
 (defun sh-ref (h op)
-  "The (displacement . zone-of-ref) for SHC/SHZ: like SHP, rp1/zp0 (odd) or rp2/zp1."
+  "FreeType Compute_Point_Displacement for SHP/SHC/SHZ: the reference is rp1/zp0 (odd
+opcode) or rp2/zp1 (even); the shift is PROJECT(cur[ref] - org[ref]) — the projection
+of the difference vector (then applied along the freedom vector by MOVE).  Returns
+(values displacement ref-point ref-zone)."
   (multiple-value-bind (rp zref) (if (logbitp 0 op) (values (hs-rp1 h) (hs-zp0 h)) (values (hs-rp2 h) (hs-zp1 h)))
-    (values (- (gc-cur h zref rp) (gc-org h zref rp)) rp zref)))
+    (let ((z (zone h zref)))
+      (values (dot14 (- (aref (hz-cur-x z) rp) (aref (hz-org-x z) rp))
+                     (- (aref (hz-cur-y z) rp) (aref (hz-org-y z) rp)) (hs-px h) (hs-py h))
+              rp zref))))
+(defun shp (h op)                                    ; SHP[a]
+  (multiple-value-bind (disp rp zref) (sh-ref h op) (declare (ignore rp zref))
+    (dotimes (k (hs-loop h)) (move h (hs-zp2 h) (hpop h) disp))
+    (setf (hs-loop h) 1)))
+(def-op #x32 (h op) (shp h op)) (def-op #x33 (h op) (shp h op))
 (defun shc (h op)                                    ; SHC: shift a whole contour
   (multiple-value-bind (disp rp zref) (sh-ref h op)
     (let* ((c (hpop h)) (ends (hs-glyph-ends h))
