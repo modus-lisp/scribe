@@ -80,6 +80,33 @@ Bit-exact fixed-point rounding (engine compensation, SROUND); DELTA exceptions
   gap is the first task of M2.
 - Comparison harness: `/tmp/weftdump.lisp` + oracle diff (per-point, any glyphs).
 
+## M2 round-2 open items (diagnostic notes for the next pass)
+Three residuals remain, all now precisely characterized (no bit-exact fix landed
+this round — they sit at the 1-unit / projection-amplified frontier):
+- **DejaVu diagonals (/, \, A, w, y, …).** `/`'s first diagonal MIRP (proj set by
+  SPVTL parallel to the stroke ⇒ near-vertical; freedom = x) targets `dist=round(cvt
+  [26]=64)` while the point already sits at the original diagonal distance `org=18`;
+  the cut-in can't fire (font sets SCVTCI=640, and 46<640), so weft moves pt2 by 46
+  projected → ×(16384/4734)=×3.46 along x → +159px, then the *next* SPVTL reads the
+  now-degenerate edge and the cascade blows up (pt0 → −937 vs FT 189).  Verified NOT
+  the cause: post-prep CVT is bit-exact vs FreeType (read from TT_Size); MDRP/MIRP
+  round/min bits; norm14 precision; SPVTL dual = proj vs org.  The contradiction —
+  identical inputs but FT keeps pt2≈67 (tiny move) — means FT's `dist` here is `org`
+  (18), i.e. its cut-in *did* fire or its projection is near-horizontal; resolving it
+  needs FreeType's live interpreter trace (freetype-py exposes none).  NB: forcing
+  SFVTCA the wrong way (0x05→freedom-y) drops `/` 17.6→0.75px but is spec-incorrect
+  (FreeType src: opcode&1=1 ⇒ x) — a red herring that only dodges the amplification.
+- **LiberationSans 1/64 tail (b, g, ", …).** e.g. `b` pt6 is IUP[x]-interpolated
+  between touched pt5 (orus 318, cur 121) and pt13 (orus 138, cur 54); orus 316 ⇒
+  54 + MulDiv(178,67,180)=54+66=120, but FT=121.  Every formula (single MulDiv,
+  DivFix+MulFix, either base) gives 120 with these inputs, so FT must touch pt6 or
+  bracket it differently — unreproducible without FT's touch state.
+- **Composite accents (é, î, ç @12; 29/52 exact).** Bases always exact; the accent
+  is placed by an fpgm align-fn (CALL) that GC's the accent's own hinted points and
+  MSIRPs the anchor.  For é the fn computes a shift that rounds to 0 (FT: +64) — the
+  measured accent coordinate is 1px off, i.e. downstream of the same sub-pixel IUP
+  tail above.  Fixing the tail should lift the accents too.
+
 ## M2 — SUBSTANTIALLY DONE (full ASCII point-exact)
 The cap/x-height diagnosis was half-right (it *was* a prep bug) but the actual root
 causes were opcode/semantics bugs, found by reading FreeType's post-prep CVT out of
