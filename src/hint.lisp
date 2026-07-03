@@ -159,15 +159,17 @@ rule is min-distance, applied by MDRP/MIRP — not here.)"
 (defun zone (h zp) (aref (hs-zones h) zp))
 
 (defun move-point (h z i dist)
-  "Move point I of zone Z by DIST (F26.6) along the freedom vector; mark touched."
+  "Move point I of zone Z by DIST (F26.6) along the freedom vector; mark touched.
+F_dot_P (freedom·projection) is clamped to 0x4000 when |F_dot_P| < 0x400, exactly as
+FreeType's Compute_Funcs — otherwise a near-perpendicular freedom/projection would
+divide by ~0 and drop (or spike) the move (e.g. DejaVu '$' diagonal at small ppem)."
   (let* ((fx (hs-fx h)) (fy (hs-fy h))
-         ;; distance along freedom vector so its projection == DIST
          (fdotp (dot14 fx fy (hs-px h) (hs-py h))))
-    (unless (zerop fdotp)
-      (when (/= fx 0) (incf (aref (hz-cur-x z) i) (muldiv dist fx fdotp))
-            (setf (aref (hz-touch z) i) (logior (aref (hz-touch z) i) 1)))
-      (when (/= fy 0) (incf (aref (hz-cur-y z) i) (muldiv dist fy fdotp))
-            (setf (aref (hz-touch z) i) (logior (aref (hz-touch z) i) 2))))))
+    (when (< (abs fdotp) #x400) (setf fdotp #x4000))
+    (when (/= fx 0) (incf (aref (hz-cur-x z) i) (muldiv dist fx fdotp))
+          (setf (aref (hz-touch z) i) (logior (aref (hz-touch z) i) 1)))
+    (when (/= fy 0) (incf (aref (hz-cur-y z) i) (muldiv dist fy fdotp))
+          (setf (aref (hz-touch z) i) (logior (aref (hz-touch z) i) 2)))))
 
 ;;; ---- program bytes ----
 (declaim (inline nextb))
