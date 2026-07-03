@@ -151,28 +151,65 @@
                 (setf (aref cov (+ row x)) (min 1d0 (abs acc))))))
           (values cov w h))))))
 
+(defparameter *hinting* nil
+  "TrueType bytecode hinting for RASTERIZE-GLYPH.  NIL: off (geometric outline,
+sub-pixel positioned).  T: grid-fit at every ppem.  A number N: grid-fit only when
+the rounded ppem <= N — large text doesn't need it and skips the interpreter cost.
+When a glyph is hinted its outline is grid-fit (crisp stems/baseline) and placed on
+the integer pixel grid (no sub-pixel x-shift); the advance stays geometric so
+painted widths still match MEASURE-TEXT-WIDTH.")
+
+(defvar *hinted-segments-fn* nil
+  "Installed by the hinting layer (hint.lisp): (FONT GID IPPEM) -> hinted segment
+lists in PX, :EMPTY for an outline-less glyph, or NIL when not hintable (caller
+falls back to the geometric path).  A hook so raster.lisp needn't depend on the
+later-loaded interpreter.")
+
+(defun %outline-bbox (contours)
+  "Return (values minx miny maxx maxy) over all points of a segment-list outline."
+  (let ((minx 1d30) (miny 1d30) (maxx -1d30) (maxy -1d30))
+    (dolist (c contours (values minx miny maxx maxy))
+      (dolist (seg c)
+        (loop for (x y) on (cdr seg) by #'cddr do
+          (setf minx (min minx (float x 1d0)) maxx (max maxx (float x 1d0))
+                miny (min miny (float y 1d0)) maxy (max maxy (float y 1d0))))))))
+
 (defun rasterize-glyph (font gid ppem &key (subpixel 0d0) variation)
   "Rasterize GID at PPEM px/em. Returns (values coverage w h left top advance)
    where (left,top) is the bitmap origin relative to the pen (px, y-down) and
-   ADVANCE is the horizontal advance in px. SUBPIXEL in [0,1) shifts x."
+   ADVANCE is the horizontal advance in px. SUBPIXEL in [0,1) shifts x.
+   When *HINTING* applies, the outline is grid-fit and placed on the pixel grid."
   (let* ((upem (font-units-per-em font))
          (scale (/ (float ppem 1d0) upem))
-         (outline (glyph-outline font gid :variation variation)))
-    (let ((adv (advance-at font gid variation)))   ; hmtx + HVAR/gvar advance delta
-      (if (null outline)
-          (values nil 0 0 0 0 (* adv scale))
-          ;; bbox in font units
-          (let ((minx 1d30) (miny 1d30) (maxx -1d30) (maxy -1d30))
-            (dolist (c outline)
-              (dolist (seg c)
-                (loop for (x y) on (cdr seg) by #'cddr do
-                  (setf minx (min minx x) maxx (max maxx x) miny (min miny y) maxy (max maxy y)))))
-            (multiple-value-bind (cov w h)
-                (rasterize-outline outline scale :dx subpixel :origin-x minx :origin-y maxy)
-              (values cov w h
-                      (floor (* minx scale))         ; left bearing in px
-                      (- (ceiling (* maxy scale)))   ; top above baseline (y-down)
-                      (* adv scale))))))))
+         (adv (advance-at font gid variation))       ; hmtx + HVAR/gvar advance delta
+         (ippem (round ppem)))
+    ;; hinted outlines come back already in px (grid-fit); rasterize at scale 1 and
+    ;; advance by the grid-fit (integer) advance so the pen stays on the pixel grid.
+    (multiple-value-bind (hinted hadv)
+        (if (and *hinting* *hinted-segments-fn* (null variation) (plusp ippem)
+                 (or (eq *hinting* t) (and (integerp *hinting*) (<= ippem *hinting*))))
+            (funcall *hinted-segments-fn* font gid ippem)
+            (values nil nil))
+    (cond
+      ((eq hinted :empty) (values nil 0 0 0 0 (float hadv 1d0)))
+      (hinted                                          ; grid-fit px segments, no sub-pixel shift
+       (multiple-value-bind (minx miny maxx maxy) (%outline-bbox hinted)
+         (declare (ignore miny maxx))
+         (multiple-value-bind (cov w h)
+             (rasterize-outline hinted 1d0 :origin-x minx :origin-y maxy)
+           (values cov w h (floor minx) (- (ceiling maxy)) (float hadv 1d0)))))
+      (t                                               ; geometric path
+       (let ((outline (glyph-outline font gid :variation variation)))
+         (if (null outline)
+             (values nil 0 0 0 0 (* adv scale))
+             (multiple-value-bind (minx miny maxx maxy) (%outline-bbox outline)
+               (declare (ignore miny maxx))
+               (multiple-value-bind (cov w h)
+                   (rasterize-outline outline scale :dx subpixel :origin-x minx :origin-y maxy)
+                 (values cov w h
+                         (floor (* minx scale))        ; left bearing in px
+                         (- (ceiling (* maxy scale)))  ; top above baseline (y-down)
+                         (* adv scale)))))))))))
 
 (defun glyph-advance (font gid)
   "Horizontal advance + lsb (font units) from hmtx."

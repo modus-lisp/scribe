@@ -556,20 +556,24 @@ glyph — NOT to whatever prep happened to leave them at."
         (hs-rp0 h) 0 (hs-rp1 h) 0 (hs-rp2 h) 0 (hs-zp0 h) 1 (hs-zp1 h) 1 (hs-zp2 h) 1 (hs-loop h) 1))
 
 (defun hint-glyph (h gid)
-  "Grid-fit GID at the hinter's ppem; return the hinted contours as lists of
-(x y on) in px (or NIL for empty / :composite for unsupported composites)."
+  "Grid-fit GID at the hinter's ppem.  Returns (values contours advance-px): the
+hinted contours as lists of (x y on) in px, and the grid-fit horizontal advance
+(phantom pp2−pp1).  Returns NIL for an empty glyph, or :composite for an
+unsupported composite."
   (let ((loaded (load-glyph-zone h gid)))
     (unless (eq loaded t) (return-from hint-glyph loaded))
     (reset-glyph-gs h)
     (let ((ins (glyph-instructions (hs-font h) gid)))
       (when ins (setf (hs-sp h) 0) (run-program h ins)))
-    ;; extract hinted contour points
-    (let* ((z (zone h 1)) (ends (hs-glyph-ends h)) (out '()) (start 0))
-      (dotimes (c (length ends) (nreverse out))
+    ;; extract hinted contour points + the hinted advance (phantom pp1..pp2)
+    (let* ((z (zone h 1)) (ends (hs-glyph-ends h)) (np (hs-glyph-npts h)) (out '()) (start 0))
+      (dotimes (c (length ends))
         (let ((end (aref ends c)) (pts '()))
           (loop for i from start to end do
             (push (list (/ (aref (hz-cur-x z) i) 64.0) (/ (aref (hz-cur-y z) i) 64.0) (= 1 (aref (hz-on z) i))) pts))
-          (push (nreverse pts) out) (setf start (1+ end)))))))
+          (push (nreverse pts) out) (setf start (1+ end))))
+      (values (nreverse out)
+              (/ (- (aref (hz-cur-x z) (1+ np)) (aref (hz-cur-x z) np)) 64.0)))))
 
 (defun hint-subglyph (h gid)
   "Hint GID standalone (own zone + instructions), returning its hinted real points as
@@ -853,3 +857,61 @@ Perpendicular is a 90° CCW rotation, matching FreeType's Ins_SxVTL.  Sets proj+
 (def-op #x26 (h) (let* ((k (hpop h)) (i (- (hs-sp h) k)) (v (aref (hs-stack h) i)))  ; MINDEX
                    (loop for j from i below (1- (hs-sp h)) do (setf (aref (hs-stack h) j) (aref (hs-stack h) (1+ j))))
                    (decf (hs-sp h)) (hpush h v)))
+
+;;; ================================================ integration with rasterize-glyph
+;;; A hinter (fpgm+prep run) is reused for every glyph at a given (font, ppem);
+;;; hinted outlines are memoized per (font, gid, ppem).  RASTERIZE-GLYPH calls
+;;; HINTED-SEGMENTS through the *HINTED-SEGMENTS-FN* hook when *HINTING* is on.
+(defvar *hinter-cache* (make-hash-table :test 'equal)
+  "(font . ppem) -> a hinter with fpgm+prep already run, or :NONE.")
+(defvar *hinted-cache* (make-hash-table :test 'equal)
+  "(font gid ppem) -> hinted segment lists (px), :EMPTY, or NIL (not hintable).")
+
+(defun get-hinter (font ppem)
+  "A cached hinter for FONT at integer PPEM (fpgm+prep run once), or :NONE if the
+font has no working hint programs."
+  (let ((key (cons font ppem)))
+    (multiple-value-bind (v present) (gethash key *hinter-cache*)
+      (if present v
+          (setf (gethash key *hinter-cache*)
+                (handler-case (let ((h (make-hinter font ppem))) (run-fpgm-prep h) h)
+                  (error () :none)))))))
+
+(defun hinted-segments (font gid ppem)
+  "Grid-fit GID at integer PPEM.  Returns (values SEGS ADVANCE-PX), memoized: SEGS is
+the hinted segment lists in px, :EMPTY for an outline-less glyph (space), or NIL when
+it can't be hinted (caller uses the geometric path).  ADVANCE-PX is the grid-fit
+advance so painted widths stay integer and even; NIL when not hinted."
+  (let ((key (list font gid ppem)))
+    (multiple-value-bind (v present) (gethash key *hinted-cache*)
+      (if present (values (car v) (cdr v))
+          (let ((h (get-hinter font ppem)))
+            (if (eq h :none) (values nil nil)
+                (handler-case
+                    (multiple-value-bind (cs adv) (hint-glyph h gid)
+                      (let* ((segs (cond ((null cs) :empty)          ; no outline (space)
+                                         ((consp cs)
+                                          (or (mapcan (lambda (c)
+                                                        (let ((s (%contour->segments c))) (and s (list s))))
+                                                      cs)
+                                              :empty))
+                                         (t nil)))                   ; unsupported -> fall back
+                             ;; empty glyphs carry no phantom advance here — round the
+                             ;; scaled hmtx advance so space is integer too.
+                             (advance (if (numberp adv) (float adv 1d0)
+                                          (float (round (* (advance-at font gid)
+                                                           (/ ppem (font-units-per-em font)))) 1d0))))
+                        (when segs (setf (gethash key *hinted-cache*) (cons segs advance)))
+                        (values segs advance)))
+                  (error () (values nil nil)))))))))
+
+(defun hinted-advance (font gid ppem)
+  "The grid-fit horizontal advance (px) for GID at integer PPEM, or NIL if the glyph
+isn't hinted (caller uses the geometric advance).  For MEASURE = PAINT consistency."
+  (nth-value 1 (hinted-segments font gid ppem)))
+
+(defun clear-hint-caches ()
+  "Drop the memoized hinters and hinted outlines (e.g. after changing fonts)."
+  (clrhash *hinter-cache*) (clrhash *hinted-cache*))
+
+(setf *hinted-segments-fn* #'hinted-segments)
