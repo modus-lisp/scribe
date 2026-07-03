@@ -485,14 +485,13 @@ per ROUND_XY_TO_GRID); components recurse + carry the 2x2 transform."
     (dot14 (- (aref (hz-orus-x zp) p) (aref (hz-orus-x zq) q))
            (- (aref (hz-orus-y zp) p) (aref (hz-orus-y zq) q)) (hs-dpx h) (hs-dpy h))))
 (defun orus-dist (h zp1 p zp0 rp0)
-  "Original projected distance from the ORUS (font-unit) difference, scaled once then
-dual-projected.  Twilight falls back to scaled org."
+  "Original projected distance (MDRP/MIRP): DUAL-PROJECT the ORUS (font-unit)
+difference, THEN scale — like FreeType (MulFix(DUALPROJ(orus-diff), x_scale), with
+x_scale==y_scale).  Doing the dual-projection before scaling rounds once at the end,
+which matters for diagonal projection vectors.  Twilight falls back to scaled org."
   (if (or (zerop zp0) (zerop zp1))
       (org-dist h zp1 p zp0 rp0)
-      (let ((z1 (zone h zp1)) (z0 (zone h zp0)))
-        (dot14 (hscale h (- (aref (hz-orus-x z1) p) (aref (hz-orus-x z0) rp0)))
-               (hscale h (- (aref (hz-orus-y z1) p) (aref (hz-orus-y z0) rp0)))
-               (hs-dpx h) (hs-dpy h)))))
+      (hscale h (orus-diff h zp1 p zp0 rp0))))
 (defun move (h zp i dist) (move-point h (zone h zp) i dist))
 (defun touch-pt (h zp i)
   (let ((z (zone h zp)))
