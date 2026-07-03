@@ -94,7 +94,12 @@ result sign is sign(a*b*c): dividing by a negative c flips it."
         (* s (floor n (abs c))))))
 (declaim (inline mul2.14 dot14))
 (defun mul2.14 (a b) (muldiv a b 16384))           ; F26.6 * F2.14 -> F26.6
-(defun dot14 (ax ay bx by) (+ (mul2.14 ax bx) (mul2.14 ay by)))
+(defun dot14 (ax ay bx by)
+  "Dot product (ax,ay)·(bx,by) with the second vector in F2.14, rounded ONCE after
+summing — exactly FreeType's TT_DotFix14.  (Rounding each term separately, as two
+mul2.14 calls, can differ by 1 and cascades into 1-unit mover errors.)"
+  (let ((s (+ (* ax bx) (* ay by))))
+    (ash (+ s #x2000 (if (minusp s) -1 0)) -14)))
 
 ;;; ------------------------------------------------------------- interpreter
 (defstruct hz                                     ; a zone of points
