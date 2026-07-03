@@ -135,9 +135,21 @@
 ;;; ===========================================================================
 (defun otl-lookup-indices (font tag feature-tags)
   "For GPOS/GSUB table TAG, return (values lookup-list-base sorted-lookup-indices)
-   for the lookups referenced by FEATURE-TAGS under the default (latn/DFLT) script."
+   for the lookups referenced by FEATURE-TAGS under the default (latn/DFLT) script.
+   Cached on the font per (tag . features): the feature/script/lookup tables are
+   text-independent, so shaping a whole page parses them once, not once per word."
+  (let ((cache (or (font-%otl font) (setf (font-%otl font) (make-hash-table :test 'equal))))
+        (key (cons tag feature-tags)))
+    (multiple-value-bind (v hit) (gethash key cache)
+      (when hit (return-from otl-lookup-indices (values (car v) (cdr v))))
+      (multiple-value-bind (llist idxs) (%otl-lookup-indices font tag feature-tags)
+        (setf (gethash key cache) (cons llist idxs))
+        (values llist idxs)))))
+
+(defun %otl-lookup-indices (font tag feature-tags)
+  "Uncached core of OTL-LOOKUP-INDICES."
   (let ((base (font-table font tag)))
-    (unless base (return-from otl-lookup-indices (values nil nil)))
+    (unless base (return-from %otl-lookup-indices (values nil nil)))
     (let* ((d (font-data font))
            (slist (+ base (u16 d (+ base 4))))
            (flist (+ base (u16 d (+ base 6))))
@@ -151,7 +163,7 @@
             (cond ((string= stag "latn") (setf script-off so))
                   ((string= stag "DFLT") (setf dflt so)))))
         (let ((script (or script-off dflt first-off)))
-          (unless script (return-from otl-lookup-indices (values llist nil)))
+          (unless script (return-from %otl-lookup-indices (values llist nil)))
           (let* ((dls (u16 d script))
                  (langsys (if (plusp dls) (+ script dls) nil))
                  (lookup-set (make-hash-table :test 'eql)))

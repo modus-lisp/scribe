@@ -24,7 +24,8 @@
   %cff            ; cached parsed CFF (lazy) for OTTO fonts
   %fvar %avar     ; cached variation axes + avar segment maps (lazy)
   %gdef           ; cached parsed GDEF (lazy); :none if absent
-  %cmap)          ; cached parsed best cmap subtable (lazy): codepoint -> gid
+  %cmap           ; cached parsed best cmap subtable (lazy): codepoint -> gid
+  %otl)           ; cached GSUB/GPOS lookup indices per (tag . features) (lazy)
 
 (defun font-table (font tag-str)
   "Return (values offset length) for TAG-STR, or NIL if absent."
