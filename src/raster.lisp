@@ -183,21 +183,22 @@ later-loaded interpreter.")
          (scale (/ (float ppem 1d0) upem))
          (adv (advance-at font gid variation))       ; hmtx + HVAR/gvar advance delta
          (ippem (round ppem)))
-    ;; hinted outlines come back already in px (grid-fit); rasterize at scale 1 and
-    ;; advance by the grid-fit (integer) advance so the pen stays on the pixel grid.
-    (multiple-value-bind (hinted hadv)
-        (if (and *hinting* *hinted-segments-fn* (null variation) (plusp ippem)
-                 (or (eq *hinting* t) (and (integerp *hinting*) (<= ippem *hinting*))))
-            (funcall *hinted-segments-fn* font gid ippem)
-            (values nil nil))
+    ;; hinted outlines come back already in px (grid-fit).  Rasterize at scale 1 with
+    ;; the sub-pixel x-shift, and advance by the fractional (geometric) advance: the
+    ;; grid-fit is what matters vertically (crisp stems/baseline), while horizontally
+    ;; the glyph stays sub-pixel positioned so inter-glyph spacing is smooth like the
+    ;; browser — integer advances quantize spacing and read as bad kerning.
+    (let ((hinted (and *hinting* *hinted-segments-fn* (null variation) (plusp ippem)
+                       (or (eq *hinting* t) (and (integerp *hinting*) (<= ippem *hinting*)))
+                       (funcall *hinted-segments-fn* font gid ippem))))
     (cond
-      ((eq hinted :empty) (values nil 0 0 0 0 (float hadv 1d0)))
-      (hinted                                          ; grid-fit px segments, no sub-pixel shift
+      ((eq hinted :empty) (values nil 0 0 0 0 (* adv scale)))
+      (hinted                                          ; grid-fit shape, sub-pixel x position
        (multiple-value-bind (minx miny maxx maxy) (%outline-bbox hinted)
          (declare (ignore miny maxx))
          (multiple-value-bind (cov w h)
-             (rasterize-outline hinted 1d0 :origin-x minx :origin-y maxy)
-           (values cov w h (floor minx) (- (ceiling maxy)) (float hadv 1d0)))))
+             (rasterize-outline hinted 1d0 :dx subpixel :origin-x minx :origin-y maxy)
+           (values cov w h (floor minx) (- (ceiling maxy)) (* adv scale)))))
       (t                                               ; geometric path
        (let ((outline (glyph-outline font gid :variation variation)))
          (if (null outline)
