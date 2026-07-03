@@ -58,7 +58,12 @@
 (defstruct (canvas (:constructor %make-canvas))
   (width 0 :type fixnum)
   (height 0 :type fixnum)
-  (pixels nil :type (simple-array (unsigned-byte 8) (*))))  ; row-major RGB8
+  (pixels nil :type (simple-array (unsigned-byte 8) (*)))   ; row-major RGB8
+  ;; Optional alpha plane (row-major, w*h).  When present the canvas is an RGBA
+  ;; surface: PIXELS hold *premultiplied* RGB and ALPHA the coverage, composited
+  ;; with straight-over premultiplied blending.  NIL keeps the classic opaque RGB
+  ;; canvas (byte-identical to before), so every existing path is unaffected.
+  (alpha nil :type (or null (simple-array (unsigned-byte 8) (*)))))
 
 (defun make-canvas (w h &optional (bg '(255 255 255)))
   (let ((px (make-array (* w h 3) :element-type '(unsigned-byte 8))))
@@ -67,6 +72,12 @@
                    (aref px (+ i 1)) (second bg)
                    (aref px (+ i 2)) (third bg)))
     (%make-canvas :width w :height h :pixels px)))
+
+(defun make-rgba-canvas (w h)
+  "A transparent RGBA canvas: premultiplied RGB and an alpha plane, both zero."
+  (%make-canvas :width w :height h
+                :pixels (make-array (* w h 3) :element-type '(unsigned-byte 8) :initial-element 0)
+                :alpha  (make-array (* w h)   :element-type '(unsigned-byte 8) :initial-element 0)))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Gamma-correct coverage compositing
@@ -95,6 +106,16 @@ naive sRGB (G=1.0) is too heavy; the browser sits between.  Bind a G for glyphs.
   (declare (type canvas cv) (type fixnum x y) (type double-float coverage))
   (when (and (>= x 0) (>= y 0) (< x (canvas-width cv)) (< y (canvas-height cv))
              (> coverage 0d0))
+    ;; RGBA surface: premultiplied straight-over compositing, tracking alpha.
+    (when (canvas-alpha cv)
+      (let* ((px (canvas-pixels cv)) (ap (canvas-alpha cv))
+             (j (+ (* y (canvas-width cv)) x)) (i (* 3 j))
+             (k (min 1d0 coverage)) (ik (- 1d0 k)))
+        (setf (aref px i)       (%clamp8 (+ (* (float (first fg) 1d0) k)  (* (aref px i) ik)))
+              (aref px (+ i 1)) (%clamp8 (+ (* (float (second fg) 1d0) k) (* (aref px (+ i 1)) ik)))
+              (aref px (+ i 2)) (%clamp8 (+ (* (float (third fg) 1d0) k)  (* (aref px (+ i 2)) ik)))
+              (aref ap j)       (%clamp8 (+ (* 255d0 k) (* (aref ap j) ik)))))
+      (return-from blend-coverage (values)))
     (let* ((px (canvas-pixels cv))
            (i (* 3 (+ (* y (canvas-width cv)) x)))
            (a (if (= *stem-darkening* 1d0) (min 1d0 coverage)

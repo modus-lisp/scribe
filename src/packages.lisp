@@ -3,7 +3,8 @@
   (:use #:cl)
   (:export
    ;; canvas + gamma-correct compositing (blend.lisp)
-   #:canvas #:make-canvas #:canvas-width #:canvas-height #:canvas-pixels
+   #:canvas #:make-canvas #:make-rgba-canvas #:canvas-width #:canvas-height
+   #:canvas-pixels #:canvas-alpha
    #:blend-coverage #:fill-coverage-span
    #:srgb->linear #:linear->srgb #:*srgb->linear* #:*linear->srgb*
    #:write-png
