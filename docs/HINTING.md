@@ -80,9 +80,35 @@ Bit-exact fixed-point rounding (engine compensation, SROUND); DELTA exceptions
   gap is the first task of M2.
 - Comparison harness: `/tmp/weftdump.lisp` + oracle diff (per-point, any glyphs).
 
-## M2 round-2 open items (diagnostic notes for the next pass)
-Three residuals remain, all now precisely characterized (no bit-exact fix landed
-this round — they sit at the 1-unit / projection-amplified frontier):
+## M2 — COMPLETE (round 3): full ASCII bit-exact on both fonts
+Using the per-instruction FreeType trace (`inspect/hint-fttrace.md`), every residual
+was root-caused and fixed.  **Printable ASCII (94 glyphs) is now 100% bit-exact vs
+FreeType at ppem 7–16 for BOTH LiberationSans and DejaVuSans.**  LiberationSans
+accented Latin-1 (53 composites) is also 53/53 exact.
+
+The round-3 fixes (all found via the STATE trace):
+- **`FT_Vector_NormLen`** exact port for SPVTL/SFVTL normalization (isqrt was ~9/16384
+  off; projection vectors now bit-exact).
+- **`dot14` rounds once** (FreeType TT_DotFix14: sum then round), not per-term.
+- **Distances project the DIFFERENCE vector** — MDRP/MIRP/IP/MD/ALIGNRP/MSIRP/SHP all
+  compute PROJECT(cur[p]−cur[q]) / DUALPROJ(org[p]−org[q]) once, not project(p)−
+  project(q).  This alone took DejaVu 71→90.
+- **IUP hybrid**: boundary classification uses scaled `org`, interior ratio uses
+  `orus` (font units) via DivFix→MulFix — exact port of `iup_worker_interpolate_`.
+  Fixed the LiberationSans b/g/%/& 1/64 tail.
+- **MIRP order**: auto-flip cvt *before* the cut-in test (fixed `%`@16).
+- **`orus-dist`** dual-projects then scales (MulFix(DUALPROJ,scale)).
+- **F_dot_P clamp**: near-perpendicular freedom/projection clamps to 0x4000 and still
+  moves (fixed DejaVu `$`@7).
+- **DIV opcode** was computing MUL (`a*b/64` instead of `a*64/b`) — corrupted fpgm
+  arithmetic; fixed the LiberationSans accent-alignment functions → composites 53/53.
+
+Remaining: DejaVuSans accented Latin-1 (~41–48/53) — the tilde/ring accents shear a
+few 1/64 in their composite instructions (a DejaVu-specific residual, still under the
+same trace method).
+
+## M2 round-2 open items (superseded — kept for history)
+Three residuals remained after round 2 (all fixed in round 3 above):
 - **DejaVu diagonals (/, \, A, w, y, …).** `/`'s first diagonal MIRP (proj set by
   SPVTL parallel to the stroke ⇒ near-vertical; freedom = x) targets `dist=round(cvt
   [26]=64)` while the point already sits at the original diagonal distance `org=18`;
