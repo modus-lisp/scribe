@@ -371,6 +371,7 @@ stop the skip at depth 0 (0x59 EIF, and optionally 0x1B ELSE)."
       (setf (hs-code h) (car def) (hs-pc h) (cdr def))
       (loop for op = (aref (hs-code h) (hs-pc h))
             do (when (= op #x2D) (return))                              ; ENDF
+               (when *hint-trace* (hint-trace-state h))                 ; trace into CALLs (align w/ FreeType)
                (step-op h))
       (setf (hs-code h) save-code (hs-pc h) save-pc))))
 (def-op #x2B (h) (call-fn h (hpop h)))                                 ; CALL
@@ -741,12 +742,33 @@ by the nearest touched point's delta (scaled ORG)."
 
 ;;; ---- vector setters that need points (SPVTL/SFVTL) + misc ----
 (defun norm14 (vx vy)
-  "Normalize (vx,vy) F26.6 to an F2.14 unit vector (FreeType Normalize)."
-  (cond ((and (zerop vx) (zerop vy)) (values 16384 0))
-        ((zerop vx) (values 0 (if (minusp vy) -16384 16384)))
-        ((zerop vy) (values (if (minusp vx) -16384 16384) 0))
-        (t (let ((w (isqrt (+ (* vx vx) (* vy vy)))))
-             (values (muldiv vx 16384 w) (muldiv vy 16384 w))))))
+  "F2.14 unit vector of (vx,vy), an exact port of FreeType's Normalize +
+FT_Vector_NormLen: Newton-Raphson normalize to length 0x10000 (16.16), then /4.
+This matches FreeType's projection vectors bit-for-bit (isqrt was ~9/16384 off,
+which cascaded into 1-unit diagonal MIRP errors)."
+  (labels ((u32 (n) (logand n #xFFFFFFFF))
+           (s32 (n) (let ((m (logand n #xFFFFFFFF))) (if (>= m #x80000000) (- m #x100000000) m))))
+    (if (and (zerop vx) (zerop vy)) (values 16384 0)
+        (let ((sx (if (minusp vx) -1 1)) (sy (if (minusp vy) -1 1)) (x (abs vx)) (y (abs vy)))
+          (cond ((zerop x) (values 0 (if (plusp y) (* sy 16384) 0)))
+                ((zerop y) (values (if (plusp x) (* sx 16384) 0) 0))
+                (t
+                 (let* ((l (if (> x y) (+ x (ash y -1)) (+ y (ash x -1))))
+                        (shift (- 32 (integer-length l))))
+                   (decf shift (+ 15 (if (>= l (ash #xAAAAAAAA (- shift))) 1 0)))
+                   (if (> shift 0)
+                       (progn (setf x (ash x shift) y (ash y shift))
+                              (setf l (if (> x y) (+ x (ash y -1)) (+ y (ash x -1)))))
+                       (setf x (ash x shift) y (ash y shift) l (ash l shift)))
+                   (let ((b (- #x10000 l)) (x_ x) (y_ y) (u 0) (v 0) (z 0))
+                     (loop
+                       (setf u (u32 (+ x_ (ash (s32 (* x_ b)) -16)))
+                             v (u32 (+ y_ (ash (s32 (* y_ b)) -16))))
+                       (setf z (truncate (- (s32 (+ (* u u) (* v v)))) #x200))
+                       (setf z (truncate (* z (ash (+ #x10000 b) -8)) #x10000))
+                       (incf b z)
+                       (when (<= z 0) (return)))
+                     (values (truncate (* sx u) 4) (truncate (* sy v) 4))))))))))
 (defun sxvtl (h op set-proj)
   "SPVTL/SFVTL: set the vector PARALLEL (opcode even) or PERPENDICULAR (opcode odd,
 `opcode & 1`) to the line from point A (zp2) to point B (zp1), in current coords.
