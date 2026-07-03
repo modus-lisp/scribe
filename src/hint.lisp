@@ -555,22 +555,30 @@ glyph — NOT to whatever prep happened to leave them at."
   (setf (hs-px h) 16384 (hs-py h) 0 (hs-dpx h) 16384 (hs-dpy h) 0 (hs-fx h) 16384 (hs-fy h) 0
         (hs-rp0 h) 0 (hs-rp1 h) 0 (hs-rp2 h) 0 (hs-zp0 h) 1 (hs-zp1 h) 1 (hs-zp2 h) 1 (hs-loop h) 1))
 
+(defparameter *hint-light* nil
+  "Light (Y-only) hinting: grid-fit the outline vertically but keep the ORIGINAL
+(fractional, unhinted) X.  Baseline/x-height/stem heights snap crisp, but horizontal
+stems stay sub-pixel — smooth, even inter-letter rhythm like the browser's default
+Linux rendering, instead of full hinting's crisp-but-choppy X grid-fit.")
+
 (defun hint-glyph (h gid)
   "Grid-fit GID at the hinter's ppem.  Returns (values contours advance-px): the
 hinted contours as lists of (x y on) in px, and the grid-fit horizontal advance
 (phantom pp2−pp1).  Returns NIL for an empty glyph, or :composite for an
-unsupported composite."
+unsupported composite.  With *HINT-LIGHT*, X is the unhinted scaled coordinate."
   (let ((loaded (load-glyph-zone h gid)))
     (unless (eq loaded t) (return-from hint-glyph loaded))
     (reset-glyph-gs h)
     (let ((ins (glyph-instructions (hs-font h) gid)))
       (when ins (setf (hs-sp h) 0) (run-program h ins)))
-    ;; extract hinted contour points + the hinted advance (phantom pp1..pp2)
-    (let* ((z (zone h 1)) (ends (hs-glyph-ends h)) (np (hs-glyph-npts h)) (out '()) (start 0))
+    ;; extract hinted contour points + the hinted advance (phantom pp1..pp2).
+    ;; light hinting keeps the original (unhinted) X so horizontal spacing is smooth.
+    (let* ((z (zone h 1)) (ends (hs-glyph-ends h)) (np (hs-glyph-npts h))
+           (xs (if *hint-light* (hz-org-x z) (hz-cur-x z))) (out '()) (start 0))
       (dotimes (c (length ends))
         (let ((end (aref ends c)) (pts '()))
           (loop for i from start to end do
-            (push (list (/ (aref (hz-cur-x z) i) 64.0) (/ (aref (hz-cur-y z) i) 64.0) (= 1 (aref (hz-on z) i))) pts))
+            (push (list (/ (aref xs i) 64.0) (/ (aref (hz-cur-y z) i) 64.0) (= 1 (aref (hz-on z) i))) pts))
           (push (nreverse pts) out) (setf start (1+ end))))
       (values (nreverse out)
               (/ (- (aref (hz-cur-x z) (1+ np)) (aref (hz-cur-x z) np)) 64.0)))))
@@ -882,7 +890,7 @@ font has no working hint programs."
 the hinted segment lists in px, :EMPTY for an outline-less glyph (space), or NIL when
 it can't be hinted (caller uses the geometric path).  ADVANCE-PX is the grid-fit
 advance so painted widths stay integer and even; NIL when not hinted."
-  (let ((key (list font gid ppem)))
+  (let ((key (list font gid ppem *hint-light*)))
     (multiple-value-bind (v present) (gethash key *hinted-cache*)
       (if present (values (car v) (cdr v))
           (let ((h (get-hinter font ppem)))
