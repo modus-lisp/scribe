@@ -479,6 +479,11 @@ per ROUND_XY_TO_GRID); components recurse + carry the 2x2 transform."
   (let ((zp (zone h zpp)) (zq (zone h zpq)))
     (dot14 (- (aref (hz-org-x zp) p) (aref (hz-org-x zq) q))
            (- (aref (hz-org-y zp) p) (aref (hz-org-y zq) q)) (hs-dpx h) (hs-dpy h))))
+(defun orus-diff (h zpp p zpq q)
+  "DUALPROJ(orus[p] - orus[q]) on the ORUS (font-unit) coords — IP's original ranges."
+  (let ((zp (zone h zpp)) (zq (zone h zpq)))
+    (dot14 (- (aref (hz-orus-x zp) p) (aref (hz-orus-x zq) q))
+           (- (aref (hz-orus-y zp) p) (aref (hz-orus-y zq) q)) (hs-dpx h) (hs-dpy h))))
 (defun orus-dist (h zp1 p zp0 rp0)
   "Original projected distance from the ORUS (font-unit) difference, scaled once then
 dual-projected.  Twilight falls back to scaled org."
@@ -638,23 +643,23 @@ Saves/restores the shared VM's zone + program state so it can nest."
               (aref (hz-org-y z1) point) (+ (aref (hz-org-y z0) rp0) (mul2.14 distance (hs-fy h)))
               (aref (hz-cur-x z1) point) (aref (hz-org-x z1) point)
               (aref (hz-cur-y z1) point) (aref (hz-org-y z1) point))))
-    (let ((cur-dist (- (gc-cur h (hs-zp1 h) point) (gc-cur h (hs-zp0 h) (hs-rp0 h)))))
-      (move h (hs-zp1 h) point (- distance cur-dist)))
+    (move h (hs-zp1 h) point (- distance (cur-dist h (hs-zp1 h) point (hs-zp0 h) (hs-rp0 h))))
     (setf (hs-rp1 h) (hs-rp0 h) (hs-rp2 h) point)
     (when (logbitp 0 op) (setf (hs-rp0 h) point))))
 (def-op #x3A (h op) (msirp h op)) (def-op #x3B (h op) (msirp h op))
 
 (def-op #x39 (h)                                     ; IP
-  ;; original ranges/distances use ORUS (font units) like FreeType, so the ratio
-  ;; keeps full precision; current uses the scaled cur coords.  Base = rp1.
+  ;; Ranges/distances are projections of DIFFERENCE vectors (FreeType PROJECT/
+  ;; DUALPROJ): original in ORUS (font units) for precision, current in scaled cur.
+  ;; Base = rp1.
   (let* ((ra (hs-rp1 h)) (rb (hs-rp2 h))
-         (oa (gc-orus h (hs-zp0 h) ra)) (ob (gc-orus h (hs-zp1 h) rb))
-         (ca (gc-cur h (hs-zp0 h) ra)) (cb (gc-cur h (hs-zp1 h) rb))
-         (old-range (- ob oa)) (cur-range (- cb ca)))
+         (old-range (orus-diff h (hs-zp1 h) rb (hs-zp0 h) ra))
+         (cur-range (cur-dist h (hs-zp1 h) rb (hs-zp0 h) ra)))
     (dotimes (k (hs-loop h))
-      (let* ((p (hpop h)) (op (gc-orus h (hs-zp2 h) p)) (cp (gc-cur h (hs-zp2 h) p))
-             (org-dist (- op oa))
-             (new (+ ca (if (zerop old-range) 0 (muldiv org-dist cur-range old-range)))))
+      (let* ((p (hpop h))
+             (org-dist (orus-diff h (hs-zp2 h) p (hs-zp0 h) ra))
+             (cp (cur-dist h (hs-zp2 h) p (hs-zp0 h) ra))
+             (new (if (zerop old-range) 0 (muldiv org-dist cur-range old-range))))
         (move h (hs-zp2 h) p (- new cp))))
     (setf (hs-loop h) 1)))
 
@@ -695,15 +700,15 @@ Saves/restores the shared VM's zone + program state so it can nest."
 (def-op #x3C (h)                                     ; ALIGNRP
   (let ((rp0 (hs-rp0 h)))
     (dotimes (k (hs-loop h))
-      (let ((p (hpop h))) (move h (hs-zp1 h) p (- (gc-cur h (hs-zp0 h) rp0) (gc-cur h (hs-zp1 h) p)))))
+      (let ((p (hpop h))) (move h (hs-zp1 h) p (cur-dist h (hs-zp0 h) rp0 (hs-zp1 h) p))))
     (setf (hs-loop h) 1)))
 
 (def-op #x46 (h) (hpush h (gc-cur h (hs-zp2 h) (hpop h))))   ; GC[0] current
 (def-op #x47 (h) (hpush h (gc-org h (hs-zp2 h) (hpop h))))   ; GC[1] original
 (def-op #x49 (h) (let ((b (hpop h)) (a (hpop h)))            ; MD[0] current distance
-                   (hpush h (- (gc-cur h (hs-zp0 h) a) (gc-cur h (hs-zp1 h) b)))))
+                   (hpush h (cur-dist h (hs-zp0 h) a (hs-zp1 h) b))))
 (def-op #x4A (h) (let ((b (hpop h)) (a (hpop h)))            ; MD[1] original distance
-                   (hpush h (- (gc-org h (hs-zp0 h) a) (gc-org h (hs-zp1 h) b)))))
+                   (hpush h (orus-dist h (hs-zp0 h) a (hs-zp1 h) b))))
 (def-op #x48 (h) (let ((v (hpop h)) (p (hpop h)))            ; SCFS
                    (move h (hs-zp2 h) p (- v (gc-cur h (hs-zp2 h) p)))))
 
