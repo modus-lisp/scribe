@@ -225,8 +225,8 @@ FreeType's trace build (ftbuild) for line-by-line execution diffs.")
 (def-op #x24 (h) (hpush h (hs-sp h)))                                     ; DEPTH
 (def-op #x60 (h) (hpush h (+ (hpop h) (hpop h))))                         ; ADD
 (def-op #x61 (h) (let ((b (hpop h)) (a (hpop h))) (hpush h (- a b))))     ; SUB
-(def-op #x62 (h) (let ((b (hpop h)) (a (hpop h))) (hpush h (muldiv a b 64)))) ; DIV
-(def-op #x63 (h) (let ((b (hpop h)) (a (hpop h))) (hpush h (muldiv a b 64)))) ; MUL
+(def-op #x62 (h) (let ((b (hpop h)) (a (hpop h))) (hpush h (if (zerop b) 0 (muldiv a 64 b))))) ; DIV: (a*64)/b
+(def-op #x63 (h) (let ((b (hpop h)) (a (hpop h))) (hpush h (muldiv a b 64)))) ; MUL: (a*b)/64
 (def-op #x64 (h) (hpush h (abs (hpop h))))                               ; ABS
 (def-op #x65 (h) (hpush h (- (hpop h))))                                 ; NEG
 (def-op #x66 (h) (hpush h (* 64 (floor (hpop h) 64))))                   ; FLOOR
