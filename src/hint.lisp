@@ -171,10 +171,28 @@ rule is min-distance, applied by MDRP/MIRP — not here.)"
                    (let ((x (logior (ash hi 8) lo))) (if (>= x #x8000) (- x #x10000) x))))
 
 ;;; ---- the eval loop ----
+(defvar *hint-trace* (and (uiop:getenv "WEFT_HINT_TRACE") t)
+  "When set (env WEFT_HINT_TRACE), dump per-instruction interpreter state to match
+FreeType's trace build (ftbuild) for line-by-line execution diffs.")
+
+(defun hint-trace-state (h)
+  "Emit one STATE line mirroring the patched FreeType ttinterp trace format."
+  (let ((z (ignore-errors (zone h 1))))
+    (format *error-output* "STATE pc=~a op=0x~2,'0X proj=(~a,~a) free=(~a,~a) rp=~a,~a,~a zp=~a,~a,~a loop=~a |"
+            (hs-pc h) (aref (hs-code h) (hs-pc h)) (hs-px h) (hs-py h) (hs-fx h) (hs-fy h)
+            (hs-rp0 h) (hs-rp1 h) (hs-rp2 h) (hs-zp0 h) (hs-zp1 h) (hs-zp2 h) (hs-loop h))
+    (when z
+      (dotimes (i (length (hz-cur-x z)))
+        (format *error-output* " ~a:(~a,~a)~a" i (aref (hz-cur-x z) i) (aref (hz-cur-y z) i)
+                (if (plusp (aref (hz-touch z) i)) "*" " "))))
+    (format *error-output* "~%")))
+
 (defun run-program (h code)
   "Execute CODE (a byte vector) to completion (pc past end)."
   (setf (hs-code h) code (hs-pc h) 0)
-  (loop while (< (hs-pc h) (length code)) do (step-op h)))
+  (loop while (< (hs-pc h) (length code)) do
+    (when *hint-trace* (hint-trace-state h))
+    (step-op h)))
 
 (defun step-op (h)
   (let ((op (nextb h)))
@@ -730,20 +748,21 @@ by the nearest touched point's delta (scaled ORG)."
         (t (let ((w (isqrt (+ (* vx vx) (* vy vy)))))
              (values (muldiv vx 16384 w) (muldiv vy 16384 w))))))
 (defun sxvtl (h op set-proj)
-  "SPVTL/SFVTL: vector along (parallel, opcode odd) or perpendicular (even) to the
-line from point A (zp2) to point B (zp1), in current coords.  Sets proj+dual (and
-also freedom for SFVTL forms)."
+  "SPVTL/SFVTL: set the vector PARALLEL (opcode even) or PERPENDICULAR (opcode odd,
+`opcode & 1`) to the line from point A (zp2) to point B (zp1), in current coords.
+Perpendicular is a 90° CCW rotation, matching FreeType's Ins_SxVTL.  Sets proj+dual
+(and also freedom for the SFVTL forms)."
   (let* ((pa (hpop h)) (pb (hpop h)) (za (zone h (hs-zp2 h))) (zb (zone h (hs-zp1 h)))
          (dx (- (aref (hz-cur-x zb) pb) (aref (hz-cur-x za) pa)))
          (dy (- (aref (hz-cur-y zb) pb) (aref (hz-cur-y za) pa))))
-    (when (evenp op) (psetf dx (- dy) dy dx))        ; perpendicular
+    (when (oddp op) (psetf dx (- dy) dy dx))          ; perpendicular (90° CCW)
     (multiple-value-bind (ux uy) (norm14 dx dy)
       (if set-proj (setf (hs-px h) ux (hs-py h) uy (hs-dpx h) ux (hs-dpy h) uy)
           (setf (hs-fx h) ux (hs-fy h) uy)))))
-(def-op #x06 (h op) (sxvtl h op t))                  ; SPVTL[0] (perpendicular)
-(def-op #x07 (h op) (sxvtl h op t))                  ; SPVTL[1] (parallel)
-(def-op #x08 (h op) (sxvtl h op nil))                ; SFVTL[0] (perpendicular)
-(def-op #x09 (h op) (sxvtl h op nil))                ; SFVTL[1] (parallel)
+(def-op #x06 (h op) (sxvtl h op t))                  ; SPVTL[0] (parallel)
+(def-op #x07 (h op) (sxvtl h op t))                  ; SPVTL[1] (perpendicular)
+(def-op #x08 (h op) (sxvtl h op nil))                ; SFVTL[0] (parallel)
+(def-op #x09 (h op) (sxvtl h op nil))                ; SFVTL[1] (perpendicular)
 (def-op #x0F (h)                                     ; ISECT: move point to line-line intersection
   (let* ((b1 (hpop h)) (b0 (hpop h)) (a1 (hpop h)) (a0 (hpop h)) (pt (hpop h))
          (z0 (zone h (hs-zp0 h))) (z1 (zone h (hs-zp1 h))) (z2 (zone h (hs-zp2 h)))
