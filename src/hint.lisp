@@ -874,6 +874,10 @@ Perpendicular is a 90° CCW rotation, matching FreeType's Ins_SxVTL.  Sets proj+
   "(font . ppem) -> a hinter with fpgm+prep already run, or :NONE.")
 (defvar *hinted-cache* (make-hash-table :test 'equal)
   "(font gid ppem) -> hinted segment lists (px), :EMPTY, or NIL (not hintable).")
+(defparameter *hinted-cache-limit* 100000
+  "Bound on *HINTED-CACHE* / *HINTER-CACHE* so a long-running host (many fonts,
+sizes, glyphs) doesn't grow them without limit; dropped wholesale when exceeded
+(pure memoization — recomputed on next use).")
 
 (defun get-hinter (font ppem)
   "A cached hinter for FONT at integer PPEM (fpgm+prep run once), or :NONE if the
@@ -881,9 +885,11 @@ font has no working hint programs."
   (let ((key (cons font ppem)))
     (multiple-value-bind (v present) (gethash key *hinter-cache*)
       (if present v
+          (progn
+            (when (> (hash-table-count *hinter-cache*) 2048) (clrhash *hinter-cache*))
           (setf (gethash key *hinter-cache*)
                 (handler-case (let ((h (make-hinter font ppem))) (run-fpgm-prep h) h)
-                  (error () :none)))))))
+                  (error () :none))))))))
 
 (defun hinted-segments (font gid ppem)
   "Grid-fit GID at integer PPEM.  Returns (values SEGS ADVANCE-PX), memoized: SEGS is
@@ -909,7 +915,10 @@ advance so painted widths stay integer and even; NIL when not hinted."
                              (advance (if (numberp adv) (float adv 1d0)
                                           (float (round (* (advance-at font gid)
                                                            (/ ppem (font-units-per-em font)))) 1d0))))
-                        (when segs (setf (gethash key *hinted-cache*) (cons segs advance)))
+                        (when segs
+                          (when (> (hash-table-count *hinted-cache*) *hinted-cache-limit*)
+                            (clrhash *hinted-cache*))
+                          (setf (gethash key *hinted-cache*) (cons segs advance)))
                         (values segs advance)))
                   (error () (values nil nil)))))))))
 
