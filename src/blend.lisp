@@ -98,6 +98,36 @@ naive sRGB (G=1.0) is too heavy; the browser sits between.  Bind a G for glyphs.
 (declaim (inline %clamp8))
 (defun %clamp8 (v) (declare (type double-float v)) (max 0 (min 255 (the fixnum (round v)))))
 
+;;; Per-run cache for the *BLEND-GAMMA* glyph path.  Compositing in power-G space
+;;; needs (chan/255)^G for both operands; the foreground colour is constant over
+;;; a glyph run and the background is one of 256 byte values, so lift both out of
+;;; the per-pixel `expt` — a 256-entry table for the background and a 3-value
+;;; cache for the foreground, keyed on the gamma and colour so a change rebuilds
+;;; them.  Byte-identical to the inline `expt` (the table holds exactly it).
+;;; Paint is single-threaded, so a shared cache is safe.
+(defvar *g-gamma* nil "Gamma the tables below were built for.")
+(declaim (type (simple-array double-float (256)) *g-bg*))
+(defvar *g-bg* (make-array 256 :element-type 'double-float))   ; byte -> (byte/255)^G
+(defvar *g-fg-key* -1 "Packed RGB of the cached foreground, or -1.")
+(declaim (type (simple-array double-float (3)) *g-fg*))
+(defvar *g-fg* (make-array 3 :element-type 'double-float))     ; foreground channels ^G
+
+(declaim (inline %gamma-prep))
+(defun %gamma-prep (gg fg)
+  "Make the background table and foreground cache current for gamma GG, colour FG."
+  (declare (type double-float gg))
+  (unless (eql gg *g-gamma*)
+    (dotimes (i 256) (setf (aref *g-bg* i) (expt (/ (float i 1d0) 255d0) gg)))
+    (setf *g-gamma* gg *g-fg-key* -1))
+  (let ((key (logior (ash (the (unsigned-byte 8) (first fg)) 16)
+                     (ash (the (unsigned-byte 8) (second fg)) 8)
+                     (the (unsigned-byte 8) (third fg)))))
+    (unless (eql key *g-fg-key*)
+      (setf (aref *g-fg* 0) (expt (/ (float (first fg) 1d0) 255d0) gg)
+            (aref *g-fg* 1) (expt (/ (float (second fg) 1d0) 255d0) gg)
+            (aref *g-fg* 2) (expt (/ (float (third fg) 1d0) 255d0) gg)
+            *g-fg-key* key))))
+
 (declaim (inline blend-coverage))
 (defun blend-coverage (cv x y coverage fg)
   "Composite FG (list R G B, 8-bit) over pixel (X,Y) at COVERAGE in [0,1].
@@ -129,17 +159,18 @@ naive sRGB (G=1.0) is too heavy; the browser sits between.  Bind a G for glyphs.
             (setf (aref px i)       (lin->srgb8 (+ (* ia (srgb->linear (aref px i)))       (* a fr)))
                   (aref px (+ i 1)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 1)))) (* a fg*)))
                   (aref px (+ i 2)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 2)))) (* a fb)))))
-          (let* ((gg (float g 1d0))
-                 (ig (/ 1d0 gg))
-                 (bl0 (expt (/ (float (aref px i) 1d0) 255d0) gg))
-                 (bl1 (expt (/ (float (aref px (+ i 1)) 1d0) 255d0) gg))
-                 (bl2 (expt (/ (float (aref px (+ i 2)) 1d0) 255d0) gg))
-                 (fl0 (expt (/ (float (first fg) 1d0) 255d0) gg))
-                 (fl1 (expt (/ (float (second fg) 1d0) 255d0) gg))
-                 (fl2 (expt (/ (float (third fg) 1d0) 255d0) gg)))
-            (setf (aref px i)       (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia bl0) (* a fl0))) ig)))
-                  (aref px (+ i 1)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia bl1) (* a fl1))) ig)))
-                  (aref px (+ i 2)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia bl2) (* a fl2))) ig))))))))
+          ;; Power-G glyph path: background transfer via the 256-entry table,
+          ;; foreground via the per-run cache — only the reverse transfer stays a
+          ;; per-pixel `expt`.  Byte-identical to before; was nine `expt` per
+          ;; pixel, now three.
+          (let* ((gg (float g 1d0)) (ig (/ 1d0 gg)))
+            (%gamma-prep gg fg)
+            (let ((bg *g-bg*) (fgl *g-fg*))
+              (declare (type (simple-array double-float (256)) bg)
+                       (type (simple-array double-float (3)) fgl))
+              (setf (aref px i)       (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia (aref bg (aref px i)))       (* a (aref fgl 0)))) ig)))
+                    (aref px (+ i 1)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia (aref bg (aref px (+ i 1)))) (* a (aref fgl 1)))) ig)))
+                    (aref px (+ i 2)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia (aref bg (aref px (+ i 2)))) (* a (aref fgl 2)))) ig)))))))))
   (values))
 
 (defun fill-coverage-span (cv x y coverages fg &optional (n (length coverages)))
