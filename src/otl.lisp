@@ -12,8 +12,13 @@
 (in-package #:scribe)
 
 ;;; ---- Coverage / ClassDef ----
-(defun parse-coverage (d o)
-  "Return a hash-table glyph-id -> coverage-index."
+(defvar *cov-cache* (make-hash-table :test 'eq :weakness :key)
+  "Memoize PARSE-COVERAGE per (font-data . offset): the same coverage table is parsed
+into a fresh hash for every text run otherwise, and the resulting hash-table churn
+dominates shaping time on text-heavy pages.  Weak on the font array so the cache drops
+when a font is collected.  The returned hashes are read-only, so sharing is safe.")
+
+(defun %parse-coverage (d o)
   (let ((ht (make-hash-table :test 'eql)) (fmt (u16 d o)))
     (ecase fmt
       (1 (let ((n (u16 d (+ o 2))))
@@ -26,8 +31,19 @@
                      do (setf (gethash g ht) (+ base k))))))))
     ht))
 
+(defun parse-coverage (d o)
+  "Return a hash-table glyph-id -> coverage-index (memoized per font+offset)."
+  (let ((inner (or (gethash d *cov-cache*)
+                   (setf (gethash d *cov-cache*) (make-hash-table :test 'eql)))))
+    (or (gethash o inner) (setf (gethash o inner) (%parse-coverage d o)))))
+
+(defvar *classdef-cache* (make-hash-table :test 'eq :weakness :key))
 (defun parse-classdef (d o)
-  "Return a hash-table glyph-id -> class (absent => class 0)."
+  "Return a hash-table glyph-id -> class (memoized per font+offset; absent => class 0)."
+  (let ((inner (or (gethash d *classdef-cache*)
+                   (setf (gethash d *classdef-cache*) (make-hash-table :test 'eql)))))
+    (or (gethash o inner) (setf (gethash o inner) (%parse-classdef d o)))))
+(defun %parse-classdef (d o)
   (let ((ht (make-hash-table :test 'eql)) (fmt (u16 d o)))
     (ecase fmt
       (1 (let ((start (u16 d (+ o 2))) (n (u16 d (+ o 4))))
