@@ -111,13 +111,24 @@ naive sRGB (G=1.0) is too heavy; the browser sits between.  Bind a G for glyphs.
 (defvar *g-fg-key* -1 "Packed RGB of the cached foreground, or -1.")
 (declaim (type (simple-array double-float (3)) *g-fg*))
 (defvar *g-fg* (make-array 3 :element-type 'double-float))     ; foreground channels ^G
+(declaim (type (simple-array (unsigned-byte 8) (4097)) *g-out*))
+(defvar *g-out* (make-array 4097 :element-type '(unsigned-byte 8)))  ; power-G value [0,1] -> sRGB8
+
+(declaim (inline %g-out))
+(defun %g-out (v)
+  "The reverse power-G transfer of blended value V, via the 4096-step table (the
+   same resolution the linear path's LIN->SRGB8 uses) instead of a per-pixel expt."
+  (declare (type double-float v))
+  (aref *g-out* (the (integer 0 4096) (min 4096 (max 0 (the fixnum (round (* 4096d0 (max 0d0 v)))))))))
 
 (declaim (inline %gamma-prep))
 (defun %gamma-prep (gg fg)
-  "Make the background table and foreground cache current for gamma GG, colour FG."
+  "Make the transfer tables and foreground cache current for gamma GG, colour FG."
   (declare (type double-float gg))
   (unless (eql gg *g-gamma*)
-    (dotimes (i 256) (setf (aref *g-bg* i) (expt (/ (float i 1d0) 255d0) gg)))
+    (let ((ig (/ 1d0 gg)))
+      (dotimes (i 256) (setf (aref *g-bg* i) (expt (/ (float i 1d0) 255d0) gg)))
+      (dotimes (i 4097) (setf (aref *g-out* i) (%clamp8 (* 255d0 (expt (/ (float i 1d0) 4096d0) ig))))))
     (setf *g-gamma* gg *g-fg-key* -1))
   (let ((key (logior (ash (the (unsigned-byte 8) (first fg)) 16)
                      (ash (the (unsigned-byte 8) (second fg)) 8)
@@ -159,18 +170,17 @@ naive sRGB (G=1.0) is too heavy; the browser sits between.  Bind a G for glyphs.
             (setf (aref px i)       (lin->srgb8 (+ (* ia (srgb->linear (aref px i)))       (* a fr)))
                   (aref px (+ i 1)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 1)))) (* a fg*)))
                   (aref px (+ i 2)) (lin->srgb8 (+ (* ia (srgb->linear (aref px (+ i 2)))) (* a fb)))))
-          ;; Power-G glyph path: background transfer via the 256-entry table,
-          ;; foreground via the per-run cache — only the reverse transfer stays a
-          ;; per-pixel `expt`.  Byte-identical to before; was nine `expt` per
-          ;; pixel, now three.
-          (let* ((gg (float g 1d0)) (ig (/ 1d0 gg)))
+          ;; Power-G glyph path: every transfer is now a table — background and
+          ;; foreground into power-G space, and the reverse transfer via *G-OUT*
+          ;; (%G-OUT) — so no `expt` remains on the per-pixel path (was nine).
+          (let ((gg (float g 1d0)))
             (%gamma-prep gg fg)
             (let ((bg *g-bg*) (fgl *g-fg*))
               (declare (type (simple-array double-float (256)) bg)
                        (type (simple-array double-float (3)) fgl))
-              (setf (aref px i)       (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia (aref bg (aref px i)))       (* a (aref fgl 0)))) ig)))
-                    (aref px (+ i 1)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia (aref bg (aref px (+ i 1)))) (* a (aref fgl 1)))) ig)))
-                    (aref px (+ i 2)) (%clamp8 (* 255d0 (expt (max 0d0 (+ (* ia (aref bg (aref px (+ i 2)))) (* a (aref fgl 2)))) ig)))))))))
+              (setf (aref px i)       (%g-out (+ (* ia (aref bg (aref px i)))       (* a (aref fgl 0))))
+                    (aref px (+ i 1)) (%g-out (+ (* ia (aref bg (aref px (+ i 1)))) (* a (aref fgl 1))))
+                    (aref px (+ i 2)) (%g-out (+ (* ia (aref bg (aref px (+ i 2)))) (* a (aref fgl 2))))))))))
   (values))
 
 (defun fill-coverage-span (cv x y coverages fg &optional (n (length coverages)))
