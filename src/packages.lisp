@@ -14,4 +14,5 @@
    #:rasterize-glyph #:rasterize-outline
    ;; font matching + metric accessors (match.lisp)
    #:match-font
+   #:font-covers-p #:fallback-font-for-codepoint
    #:font-ascent #:font-descent #:font-line-gap))
