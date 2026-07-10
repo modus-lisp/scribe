@@ -155,6 +155,97 @@ regular face (the caller may synthesize emphasis)."
            when font return font)
      (error "scribe: match-font found no readable shipped face in ~a" *fonts-dir*))))
 
+;;; ---- script fallback -------------------------------------------------------
+;;; match-font resolves the PRIMARY face for a CSS family (Liberation for the
+;;; generic Latin families).  Liberation covers Latin/Greek/Cyrillic; for other
+;;; scripts a consumer itemizes its text and, for each codepoint the primary face
+;;; lacks, asks FALLBACK-FONT-FOR-CODEPOINT for a bundled Noto face covering that
+;;; script (Arabic, Hebrew, the Indic scripts, CJK, emoji, ...).  This is Unicode
+;;; block -> face itemization, the same model a browser uses; coverage is then
+;;; confirmed against the chosen face's cmap so a stray codepoint still resolves.
+
+(defun font-covers-p (font cp)
+  "True when FONT has a real (non-.notdef) glyph for Unicode codepoint CP."
+  (and font (let ((g (ignore-errors (font-glyph-index font cp)))) (and g (plusp g)))))
+
+(defparameter *fallback-blocks*
+  ;; (lo hi filename) — Unicode range -> the bundled Noto face for that script.
+  ;; Ranges are disjoint; a linear scan finds the covering face.  CJK ideographs
+  ;; and symbols resolve to Noto Sans SC, kana to JP, hangul to KR.
+  '((#x0530 #x058F "NotoSansArmenian-Regular.ttf") (#xFB13 #xFB17 "NotoSansArmenian-Regular.ttf")
+    (#x0590 #x05FF "NotoSansHebrew-Regular.ttf")   (#xFB1D #xFB4F "NotoSansHebrew-Regular.ttf")
+    (#x0600 #x06FF "NotoSansArabic-Regular.ttf")   (#x0750 #x077F "NotoSansArabic-Regular.ttf")
+    (#x08A0 #x08FF "NotoSansArabic-Regular.ttf")   (#xFB50 #xFDFF "NotoSansArabic-Regular.ttf")
+    (#xFE70 #xFEFF "NotoSansArabic-Regular.ttf")
+    (#x0780 #x07BF "NotoSansThaana-Regular.ttf")
+    (#x07C0 #x07FF "NotoSansNKo-Regular.ttf")
+    (#x0900 #x097F "NotoSansDevanagari-Regular.ttf")
+    (#x0980 #x09FF "NotoSansBengali-Regular.ttf")
+    (#x0A00 #x0A7F "NotoSansGurmukhi-Regular.ttf")
+    (#x0A80 #x0AFF "NotoSansGujarati-Regular.ttf")
+    (#x0B00 #x0B7F "NotoSansOriya-Regular.ttf")
+    (#x0B80 #x0BFF "NotoSansTamil-Regular.ttf")
+    (#x0C00 #x0C7F "NotoSansTelugu-Regular.ttf")
+    (#x0C80 #x0CFF "NotoSansKannada-Regular.ttf")
+    (#x0D00 #x0D7F "NotoSansMalayalam-Regular.ttf")
+    (#x0D80 #x0DFF "NotoSansSinhala-Regular.ttf")
+    (#x0E00 #x0E7F "NotoSansThai-Regular.ttf")
+    (#x0E80 #x0EFF "NotoSansLao-Regular.ttf")
+    (#x0F00 #x0FFF "NotoSerifTibetan-Regular.ttf")
+    (#x1000 #x109F "NotoSansMyanmar-Regular.ttf")
+    (#x10A0 #x10FF "NotoSansGeorgian-Regular.ttf") (#x1C90 #x1CBF "NotoSansGeorgian-Regular.ttf")
+    (#x2D00 #x2D2F "NotoSansGeorgian-Regular.ttf")
+    (#x1200 #x139F "NotoSansEthiopic-Regular.ttf") (#x2D80 #x2DDF "NotoSansEthiopic-Regular.ttf")
+    (#x13A0 #x13FF "NotoSansCherokee-Regular.ttf") (#xAB70 #xABBF "NotoSansCherokee-Regular.ttf")
+    (#x1780 #x17FF "NotoSansKhmer-Regular.ttf")    (#x19E0 #x19FF "NotoSansKhmer-Regular.ttf")
+    (#x2C80 #x2CFF "NotoSansCoptic-Regular.ttf")
+    (#xA000 #xA4CF "NotoSansYi-Regular.ttf")
+    (#xA500 #xA63F "NotoSansVai-Regular.ttf")
+    (#x104B0 #x104FF "NotoSansOsage-Regular.ttf")
+    (#x1E900 #x1E95F "NotoSansAdlam-Regular.ttf")
+    ;; CJK: kana -> JP, hangul -> KR, ideographs/symbols -> SC
+    (#x3040 #x30FF "NotoSansJP-Regular.ttf")       (#x31F0 #x31FF "NotoSansJP-Regular.ttf")
+    (#x1100 #x11FF "NotoSansKR-Regular.ttf")       (#x3130 #x318F "NotoSansKR-Regular.ttf")
+    (#xA960 #xA97F "NotoSansKR-Regular.ttf")       (#xAC00 #xD7FF "NotoSansKR-Regular.ttf")
+    (#x2E80 #x2FDF "NotoSansSC-Regular.ttf")       (#x3000 #x303F "NotoSansSC-Regular.ttf")
+    (#x3200 #x4DBF "NotoSansSC-Regular.ttf")       (#x4E00 #x9FFF "NotoSansSC-Regular.ttf")
+    (#xF900 #xFAFF "NotoSansSC-Regular.ttf")       (#xFF00 #xFFEF "NotoSansSC-Regular.ttf")
+    (#x20000 #x2FA1F "NotoSansSC-Regular.ttf")
+    ;; emoji & pictographs
+    (#x2600 #x27BF "NotoEmoji-Regular.ttf")        (#x2B00 #x2BFF "NotoEmoji-Regular.ttf")
+    (#x1F000 #x1FAFF "NotoEmoji-Regular.ttf"))
+  "Unicode block -> bundled fallback face filename under *FONTS-DIR*.")
+
+(defparameter *fallback-probe*
+  '("NotoSans-Regular.ttf" "NotoSansSC-Regular.ttf" "NotoSansJP-Regular.ttf"
+    "NotoSansKR-Regular.ttf" "NotoEmoji-Regular.ttf")
+  "Broad-coverage faces probed by cmap when the block table has no entry (or its
+face lacks the codepoint) — Noto Sans first for Latin/Greek/Cyrillic extensions.")
+
+(defvar *fallback-cache* (make-hash-table :test 'equal)
+  "filename -> open-font (or :failed) for lazily-opened fallback faces.")
+
+(defun %fallback-open (fname)
+  "Lazily open (and cache) the fallback face FNAME from *FONTS-DIR*, or NIL."
+  (multiple-value-bind (v present) (gethash fname *fallback-cache*)
+    (if present
+        (unless (eq v :failed) v)
+        (let ((font (%read-font-file (merge-pathnames fname *fonts-dir*))))
+          (setf (gethash fname *fallback-cache*) (or font :failed))
+          font))))
+
+(defun fallback-font-for-codepoint (cp)
+  "Return a bundled open-font whose script covers Unicode codepoint CP — via the
+block table, confirmed against the face's cmap, else by probing the broad-coverage
+faces.  NIL when nothing bundled covers CP (the caller keeps its primary face and
+renders .notdef).  Faces are opened lazily and cached, so cost is paid once."
+  (let ((fname (loop for (lo hi fn) in *fallback-blocks*
+                     when (<= lo cp hi) return fn)))
+    (or (and fname (let ((f (%fallback-open fname))) (and (font-covers-p f cp) f)))
+        (loop for fn in *fallback-probe*
+              for f = (%fallback-open fn)
+              when (font-covers-p f cp) return f))))
+
 ;;; ---- metric accessors (for line-height computation) ------------------------
 ;;; hhea ascent/descent/lineGap in font units; a consumer scales by ppem/upem.
 
