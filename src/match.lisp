@@ -211,9 +211,10 @@ regular face (the caller may synthesize emphasis)."
     (#x3200 #x4DBF "NotoSansSC-Regular.ttf")       (#x4E00 #x9FFF "NotoSansSC-Regular.ttf")
     (#xF900 #xFAFF "NotoSansSC-Regular.ttf")       (#xFF00 #xFFEF "NotoSansSC-Regular.ttf")
     (#x20000 #x2FA1F "NotoSansSC-Regular.ttf")
-    ;; emoji & pictographs
-    (#x2600 #x27BF "NotoEmoji-Regular.ttf")        (#x2B00 #x2BFF "NotoEmoji-Regular.ttf")
-    (#x1F000 #x1FAFF "NotoEmoji-Regular.ttf"))
+    ;; emoji & pictographs — Twemoji is COLR (colour); NotoEmoji (mono) stays in
+    ;; the probe list below for anything Twemoji happens not to cover.
+    (#x2600 #x27BF "Twemoji.ttf")                  (#x2B00 #x2BFF "Twemoji.ttf")
+    (#x1F000 #x1FAFF "Twemoji.ttf"))
   "Unicode block -> bundled fallback face filename under *FONTS-DIR*.")
 
 (defparameter *fallback-probe*

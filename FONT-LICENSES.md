@@ -20,3 +20,12 @@ and — if modified — are not distributed under the reserved "Liberation" name
 Copyright © 2012 Red Hat, Inc., with Liberation being a trademark of Red Hat.
 Upstream: https://github.com/liberationfonts/liberation-fonts
 Full license text: `fonts/LICENSE-Liberation.txt`.
+
+## Twemoji (colour emoji)
+
+`fonts/Twemoji.ttf` is Twitter's open-source emoji, as a COLR/CPAL colour font.
+The emoji artwork is licensed **CC-BY 4.0**; the accompanying code is MIT.  scribe
+bundles it as the default colour-emoji fallback face.
+
+Copyright © Twitter, Inc. and other contributors.
+Upstream: https://github.com/twitter/twemoji  (CC-BY 4.0)
