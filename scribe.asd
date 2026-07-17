@@ -31,4 +31,5 @@ gamma-correct linear-light compositing. No FFI, no FreeType, no HarfBuzz."
      (:file "shape")     ; glyph-pos struct
      (:file "otl")       ; DONE: GSUB/GPOS shaping — kerning + ligatures (strong-tier)
      (:file "hint")      ; WIP: TrueType bytecode hinting (grid-fit small text)
-     (:file "match")))))  ; DONE: CSS font-family matching over the shipped faces
+     (:file "match")     ; DONE: CSS font-family matching over the shipped faces
+     (:file "color")))))  ; DONE: COLR v0 / CPAL colour glyphs (layered vector emoji)

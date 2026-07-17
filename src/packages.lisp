@@ -15,4 +15,6 @@
    ;; font matching + metric accessors (match.lisp)
    #:match-font
    #:font-covers-p #:fallback-font-for-codepoint
-   #:font-ascent #:font-descent #:font-line-gap))
+   #:font-ascent #:font-descent #:font-line-gap
+   ;; colour glyphs (color.lisp): COLR v0 / CPAL layered vector emoji
+   #:color-glyph-p #:color-glyph-layers #:rasterize-color-glyph))
