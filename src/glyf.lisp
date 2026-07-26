@@ -144,12 +144,19 @@ the whole cmap for every character measured, quadratic on text-heavy pages."
                 (let ((best (or (find-sub 3 10 12) (find-sub 0 10 12)   ; full Unicode
                                 (find-sub 3 1 4)   (find-sub 0 3 4)     ; BMP
                                 (find-sub 0 4 12)  (find-sub 0 6 12)
+                                (find-sub 1 0 0)   (find-sub 3 0 0)     ; byte-encoded
+                                (find-sub 0 0 0)
                                 (first subs))))
                   (or (when best
-                        (ecase (third best)
+                        ;; CASE (not ECASE): a subset may carry a format we don't
+                        ;; decode (e.g. 2, high-byte CJK) — treat it as no cmap
+                        ;; rather than signalling.
+                        (case (third best)
+                          (0  (parse-cmap-0  d (fourth best)))
                           (4  (parse-cmap-4  d (fourth best)))
                           (6  (parse-cmap-6  d (fourth best)))
-                          (12 (parse-cmap-12 d (fourth best)))))
+                          (12 (parse-cmap-12 d (fourth best)))
+                          (t  nil)))
                       (make-hash-table :test 'eql))))))))   ; empty (no cmap) -> parsed once
 
 (defun font-glyph-index (font codepoint)

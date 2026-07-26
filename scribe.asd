@@ -22,7 +22,8 @@ gamma-correct linear-light compositing. No FFI, no FreeType, no HarfBuzz."
      (:file "tables/post")
      (:file "tables/name")
      (:file "cmap")      ; DONE: cmap header kernel + format 6 (strong-tier)
-     (:file "tables/cmap-4")   ; W2 swarm units
+     (:file "tables/cmap-0")   ; W2 swarm units
+     (:file "tables/cmap-4")
      (:file "tables/cmap-12")
      (:file "cff")       ; DONE: CFF/Type2 charstring outlines (strong-tier)
      (:file "var")       ; DONE: fvar/avar/gvar variable fonts
