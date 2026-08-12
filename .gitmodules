@@ -1,3 +1,6 @@
 [submodule "deps/brotli-pure"]
 	path = deps/brotli-pure
 	url = https://github.com/modus-lisp/brotli-pure.git
+[submodule "deps/cram"]
+	path = deps/cram
+	url = https://github.com/modus-lisp/cram.git
