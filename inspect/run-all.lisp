@@ -2,7 +2,7 @@
 ;;;; Used by inspect/run-all.sh (CI). Needs only scribe + the vendored oracle
 ;;;; vectors + the redistributable corpus fonts — no Python/HarfBuzz/FreeType.
 (defparameter *insp* (directory-namestring (or *load-truename* *load-pathname*)))
-(dolist (f '("table-test" "cmap-test" "shape-test"))
+(dolist (f '("table-test" "cmap-test" "shape-test" "woff-test"))
   (load (merge-pathnames (format nil "~a.lisp" f) *insp*)))
 
 (defun frac-eq (s marker)
@@ -33,7 +33,10 @@
     (let ((o (cap (find-symbol "RUN-ALL" :scribe.stest))))
       (chk "shape:run-all (vs HarfBuzz)" (and (frac-eq o "shaping: ") (frac-eq o "match; ")) o))
     (let ((o (cap (find-symbol "RUN-FEATURES" :scribe.stest))))
-      (chk "shape:features (vs HarfBuzz)" (frac-eq o "full ") o)))
+      (chk "shape:features (vs HarfBuzz)" (frac-eq o "full ") o))
+    (let ((o (cap (find-symbol "RUN" :scribe.wtest))))
+      (chk "woff1:round-trip (per-table zlib via cram)"
+           (and (search ", 0 failed" o) (not (search "vacuous" o))) o)))
   (format t "~%=== ~a ===~%"
           (if (zerop fails) "ALL GATES PASS" (format nil "~d GATE(S) FAILED" fails)))
   (uiop:quit (if (zerop fails) 0 1)))

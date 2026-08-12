@@ -1,9 +1,10 @@
 ;;;; dmg-fonts.lisp — carve font files out of an Apple .dmg font installer.
 ;;;;
-;;;; Pure Common Lisp, clean-room. No FFI, no external compression libraries.
-;;;; The only dependency loaded is `scribe` itself (the consumer), used purely to
-;;;; *validate* carved fonts. Everything in the extraction pipeline — DEFLATE
-;;;; inflate, base64, UDIF, HFS+ scan, xar, gzip, cpio, sfnt carve — is our own.
+;;;; Pure Common Lisp, clean-room. No FFI, no third-party compression libraries.
+;;;; It loads two of our own systems: `cram` for the DEFLATE inflate behind the
+;;;; zlib and gzip stages, and `scribe` (the consumer) purely to *validate* carved
+;;;; fonts. The rest of the pipeline — base64, UDIF, HFS+ scan, xar, cpio, sfnt
+;;;; carve — is right here.
 ;;;;
 ;;;; Pipeline:  DMG (UDIF) -> reconstruct HFS+ image -> find xar! .pkg
 ;;;;            -> zlib TOC -> Payload (gzip) -> gunzip -> cpio -> carve sfnt
@@ -13,7 +14,13 @@
 ;;;; All multi-byte integers in the on-disk structures are BIG-ENDIAN unless a
 ;;;; reader is explicitly named *-le.
 
-(load (merge-pathnames "../src/deflate.lisp" *load-pathname*))
+;; cram supplies the inflate (zlib + gzip); it is a sibling repo with no
+;; dependencies of its own, found the same way ENSURE-SCRIBE finds scribe.
+(require :asdf)
+(asdf:initialize-source-registry
+ (let ((here (make-pathname :name nil :type nil :defaults *load-truename*)))
+   `(:source-registry (:tree ,(merge-pathnames "../../" here)) :inherit-configuration)))
+(handler-bind ((warning #'muffle-warning)) (asdf:load-system "cram"))
 
 (defpackage #:dmg-fonts
   (:use #:cl)
@@ -168,7 +175,7 @@
                   ((= etype #x00000001)               ; raw copy
                    (replace image dmg :start1 out-off :start2 src-start :end2 src-end))
                   ((= etype #x80000005)               ; zlib
-                   (let ((plain (deflate:zlib-decompress dmg :start src-start :end src-end)))
+                   (let ((plain (cram:zlib-decompress dmg :start src-start :end src-end)))
                      (replace image plain :start1 out-off)))
                   ((= etype #x80000006)               ; bzip2 (not expected here)
                    (error "dmg: bzip2 chunk encountered (unsupported)"))
@@ -192,7 +199,7 @@
            (toc-start (+ xoff header-size))
            (toc-end (+ toc-start toc-comp-len))
            (heap (+ toc-start toc-comp-len))
-           (toc-bytes (deflate:zlib-decompress image :start toc-start :end toc-end))
+           (toc-bytes (cram:zlib-decompress image :start toc-start :end toc-end))
            (toc (map 'string #'code-char toc-bytes)))
       (multiple-value-bind (offset length) (toc-payload-extent toc)
         (unless offset (error "xar: no Payload entry found in TOC"))
@@ -442,7 +449,7 @@
                 (length payload) (aref payload 0) (aref payload 1))
         (format t "[4/6] gunzip Payload -> cpio~%")
         (let ((cpio (if (and (= (aref payload 0) #x1f) (= (aref payload 1) #x8b))
-                        (deflate:gzip-decompress payload)
+                        (cram:gzip-decompress payload)
                         payload)))
           (format t "      cpio ~d bytes (magic ~a)~%"
                   (length cpio)

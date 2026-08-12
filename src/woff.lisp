@@ -3,10 +3,10 @@
 ;;;; scribe:open-font transparently accepts .woff2 / .woff bytes: detect the
 ;;;; signature, decompress to a standard in-memory sfnt, then parse as normal.
 ;;;;
-;;;;   wOFF (0x774F4646) -> WOFF1: per-table zlib (deflate:zlib-decompress)
+;;;;   wOFF (0x774F4646) -> WOFF1: per-table zlib (cram:zlib-decompress)
 ;;;;   wOF2 (0x774F4632) -> WOFF2: single brotli block + glyf/loca transform
 ;;;;
-;;;; Compression deps only: brotli-pure (WOFF2 block), deflate (WOFF1 tables).
+;;;; Compression deps only: brotli-pure (WOFF2 block), cram (WOFF1 tables).
 ;;;; Everything else — header/dir/UIntBase128/255UInt16/triplet/glyf-rebuild/
 ;;;; sfnt-reassembly — is our own code, per the W3C WOFF2 spec §5.2.
 (in-package #:scribe)
@@ -153,7 +153,7 @@
                    (orig-len (u32 d (+ rec 12))))
               (let* ((raw (subseq d off (+ off comp-len)))
                      (data (if (< comp-len orig-len)
-                               (deflate:zlib-decompress raw)
+                               (cram:zlib-decompress raw)
                                raw)))
                 (unless (= (length data) orig-len)
                   (error "woff1: table ~a length ~d != origLength ~d"
