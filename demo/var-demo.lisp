@@ -22,7 +22,10 @@
           (when c (blit cv c w h (+ (floor penx) left) (+ baseline top) col))
           (incf penx adv))))))
 
-(let* ((font (open-font (rd "/home/claude/scribe/inspect/corpus/NewYork.ttf")))
+(let* ((corpus (merge-pathnames "../inspect/corpus/"       ; this repo's own, wherever it sits
+                                (make-pathname :name nil :type nil
+                                               :defaults *load-truename*)))
+       (font (open-font (rd (merge-pathnames "NewYork.ttf" corpus))))
        (cv (make-canvas 900 560 '(252 252 252))) (ink '(20 20 26)) (g '(150 150 158))
        (s "Hamburgevons"))
   ;; weight sweep

@@ -354,12 +354,18 @@
 ;;; ---------------------------------------------------------------------------
 
 (defvar *scribe-loaded* nil)
+;; This repo's root, captured at load time (inside ENSURE-SCRIBE the load
+;; variables are long unbound), so the tool runs from any checkout.
+(defvar *scribe-root*
+  (merge-pathnames "../" (make-pathname :name nil :type nil
+                                        :defaults (or *load-truename*
+                                                      *compile-file-truename*))))
 (defun ensure-scribe ()
   (unless *scribe-loaded*
     (require :asdf)
     (let ((reg (find-symbol "*CENTRAL-REGISTRY*" :asdf))
           (loadsys (find-symbol "LOAD-SYSTEM" :asdf)))
-      (pushnew #p"/home/claude/scribe/" (symbol-value reg) :test #'equal)
+      (pushnew *scribe-root* (symbol-value reg) :test #'equal)
       (handler-bind ((warning #'muffle-warning))
         (funcall loadsys "scribe")))
     (setf *scribe-loaded* t)))
