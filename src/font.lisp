@@ -65,7 +65,23 @@
               (cdr (assoc "numGlyphs" (parse-maxp font) :test #'string=)))
         (setf (font-num-h-metrics font)
               (cdr (assoc "numberOfHMetrics" (parse-hhea font) :test #'string=)))
+        (%warm-font font)
         font))))
+
+(defun %warm-font (font)
+  "Fill the font's lazy caches now, on the thread that opened it, so the font is READ-ONLY from
+   here on and any thread may draw with it.  On modus a thread may not store its own objects
+   into memory another thread owns: a compositor thread that was first to ask for a glyph used
+   to fill the cmap slot of a font main had opened, and was refused.  A cache that fails to
+   build is left for the first use to report.  The OpenType lookup table is created empty; its
+   entries are still filled as text is shaped, on whichever thread shapes."
+  (ignore-errors (font-cmap font))
+  (ignore-errors (font-fvar font))
+  (ignore-errors (font-avar font))
+  (ignore-errors (parse-gdef font))
+  (when (font-table font "CFF ") (ignore-errors (font-cff font)))
+  (unless (font-%otl font) (setf (font-%otl font) (make-hash-table :test 'equal)))
+  font)
 
 ;;; ===========================================================================
 ;;; Table decoders — each (parse-X font) -> alist (field-string . value).
