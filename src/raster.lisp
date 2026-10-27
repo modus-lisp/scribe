@@ -194,23 +194,31 @@ later-loaded interpreter.")
     (cond
       ((eq hinted :empty) (values nil 0 0 0 0 (* adv scale)))
       (hinted                                          ; grid-fit shape, sub-pixel x position
+       ;; Bitmap (0,0) is the integer pixel corner returned as (left,top).  Anchoring it
+       ;; at the fractional bbox corner instead shifted each glyph by its own
+       ;; ceil(maxy)-maxy / minx-floor(minx) — up to 1px, different per glyph, so a
+       ;; line's baseline jumped wherever a glyph's top wasn't grid-fit (i/j dots,
+       ;; serifs, curves).
        (multiple-value-bind (minx miny maxx maxy) (%outline-bbox hinted)
          (declare (ignore miny maxx))
-         (multiple-value-bind (cov w h)
-             (rasterize-outline hinted 1d0 :dx subpixel :origin-x minx :origin-y maxy)
-           (values cov w h (floor minx) (- (ceiling maxy)) (* adv scale)))))
+         (let ((left (floor minx)) (top (ceiling maxy)))
+           (multiple-value-bind (cov w h)
+               (rasterize-outline hinted 1d0 :dx subpixel
+                                             :origin-x (float left 1d0) :origin-y (float top 1d0))
+             (values cov w h left (- top) (* adv scale))))))
       (t                                               ; geometric path
        (let ((outline (glyph-outline font gid :variation variation)))
          (if (null outline)
              (values nil 0 0 0 0 (* adv scale))
              (multiple-value-bind (minx miny maxx maxy) (%outline-bbox outline)
                (declare (ignore miny maxx))
-               (multiple-value-bind (cov w h)
-                   (rasterize-outline outline scale :dx subpixel :origin-x minx :origin-y maxy)
-                 (values cov w h
-                         (floor (* minx scale))        ; left bearing in px
-                         (- (ceiling (* maxy scale)))  ; top above baseline (y-down)
-                         (* adv scale)))))))))))
+               ;; bitmap (0,0) at the integer pixel corner (left,top), as above
+               (let ((left (floor (* minx scale)))      ; left bearing in px
+                     (top (ceiling (* maxy scale))))    ; top above baseline
+                 (multiple-value-bind (cov w h)
+                     (rasterize-outline outline scale :dx subpixel
+                                                      :origin-x (/ left scale) :origin-y (/ top scale))
+                   (values cov w h left (- top) (* adv scale))))))))))))
 
 (defun glyph-advance (font gid)
   "Horizontal advance + lsb (font units) from hmtx."
