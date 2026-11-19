@@ -226,12 +226,20 @@ face lacks the codepoint) — Noto Sans first for Latin/Greek/Cyrillic extension
 (defvar *fallback-cache* (make-hash-table :test 'equal)
   "filename -> open-font (or :failed) for lazily-opened fallback faces.")
 
+(defvar *face-opener* nil
+  "NIL, or a function of a fallback face's file name returning the open face (or NIL): how a thread that
+   should not hold a face itself gets one opened elsewhere.  On modus a page worker binds it to ask the
+   main thread, so a face is read once, into memory every thread may read, and only when a page needs
+   it -- a worker reading the CJK faces itself put 17 MB in its own heap.")
+
 (defun %fallback-open (fname)
-  "Lazily open (and cache) the fallback face FNAME from *FONTS-DIR*, or NIL."
+  "Lazily open (and cache) the fallback face FNAME from *FONTS-DIR* (or through *FACE-OPENER*), or NIL."
   (multiple-value-bind (v present) (gethash fname *fallback-cache*)
     (if present
         (unless (eq v :failed) v)
-        (let ((font (%read-font-file (merge-pathnames fname *fonts-dir*))))
+        (let ((font (if *face-opener*
+                        (funcall *face-opener* fname)
+                        (%read-font-file (merge-pathnames fname *fonts-dir*)))))
           (setf (gethash fname *fallback-cache*) (or font :failed))
           font))))
 

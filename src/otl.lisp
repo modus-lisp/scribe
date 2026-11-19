@@ -149,12 +149,24 @@ when a font is collected.  The returned hashes are read-only, so sharing is safe
 ;;; ===========================================================================
 ;;; Script / Feature / Lookup navigation
 ;;; ===========================================================================
+(defvar *otl-caches* nil
+  "NIL, or this thread's own FONT -> lookup-index table (WITH-THREAD-STATE binds it).  A font is
+   shared by every thread once opened (%WARM-FONT), but its lookup cache fills as text is shaped;
+   on modus a thread other than the font's opener may not store into the font's own table, so
+   such a thread keeps its tables here.")
+
+(defun %otl-cache (font)
+  (if *otl-caches*
+      (or (gethash font *otl-caches*)
+          (setf (gethash font *otl-caches*) (make-hash-table :test 'equal)))
+      (or (font-%otl font) (setf (font-%otl font) (make-hash-table :test 'equal)))))
+
 (defun otl-lookup-indices (font tag feature-tags)
   "For GPOS/GSUB table TAG, return (values lookup-list-base sorted-lookup-indices)
    for the lookups referenced by FEATURE-TAGS under the default (latn/DFLT) script.
    Cached on the font per (tag . features): the feature/script/lookup tables are
    text-independent, so shaping a whole page parses them once, not once per word."
-  (let ((cache (or (font-%otl font) (setf (font-%otl font) (make-hash-table :test 'equal))))
+  (let ((cache (%otl-cache font))
         (key (cons tag feature-tags)))
     (multiple-value-bind (v hit) (gethash key cache)
       (when hit (return-from otl-lookup-indices (values (car v) (cdr v))))

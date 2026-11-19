@@ -12,6 +12,11 @@
 
 (in-package #:scribe)
 
+(defun %copy-table (h)
+  (let ((c (make-hash-table :test (hash-table-test h) :size (max 16 (hash-table-count h)))))
+    (maphash (lambda (k v) (setf (gethash k c) v)) h)
+    c))
+
 (defmacro with-thread-state (() &body body)
   "BODY with scribe's caches and scratch private to this thread.  Costs one set of empty caches
    (they refill as the thread draws); a thread that draws once does not need it."
@@ -24,8 +29,12 @@
          (*colr-cache* (make-hash-table :test 'eq))
          (*hinter-cache* (make-hash-table :test 'equal))
          (*hinted-cache* (make-hash-table :test 'equal))
-         (*font-cache* (make-hash-table :test 'equal))
-         (*fallback-cache* (make-hash-table :test 'equal))
+         ;; fonts are shared once opened, so the caller's opened faces are COPIED: a page
+         ;; worker does not read megabytes of CJK fallback faces main already has.  Their
+         ;; shaping caches are this thread's own (*OTL-CACHES*).
+         (*font-cache* (%copy-table *font-cache*))
+         (*fallback-cache* (%copy-table *fallback-cache*))
+         (*otl-caches* (make-hash-table :test 'eq))
          (*cov-cache* (make-hash-table :test 'eq))
          (*classdef-cache* (make-hash-table :test 'eq)))
      ,@body))
