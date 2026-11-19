@@ -183,6 +183,56 @@ naive sRGB (G=1.0) is too heavy; the browser sits between.  Bind a G for glyphs.
                     (aref px (+ i 2)) (%g-out (+ (* ia (aref bg (aref px (+ i 2)))) (* a (aref fgl 2))))))))))
   (values))
 
+
+(defun blend-coverage-glyph (cv cov w h ox oy cx0 cy0 cx1 cy1 alpha fg)
+  "Composite a glyph's coverage block COV (W x H, row-major, in [0,1]) with its
+   top-left at (OX,OY), clipped to [CX0,CX1) x [CY0,CY1) and to the canvas, each
+   coverage scaled by ALPHA: BLEND-COVERAGE for every pixel, the same arithmetic,
+   with what it would look up per pixel -- *BLEND-GAMMA*, *STEM-DARKENING*, the
+   power-G tables -- read once per glyph.
+
+   WHY: a page's text is hundreds of thousands of covered pixels, and each
+   BLEND-COVERAGE read some ten specials.  On a modus worker a special the thread
+   has bound (scribe's WITH-THREAD-STATE binds these tables, and the painter binds
+   the gamma around every run) is found by walking its binding stack, so a page
+   painted on a worker spent most of its paint time in those reads."
+  (let* ((cw (canvas-width cv)) (ch (canvas-height cv))
+         (x0 (max cx0 0)) (y0 (max cy0 0)) (x1 (min cx1 cw)) (y1 (min cy1 ch))
+         (g *blend-gamma*))
+    (if (or (canvas-alpha cv) (null g))
+        ;; the RGBA surface and the linear-light path: per pixel, as before
+        (dotimes (yy h)
+          (let ((py (+ oy yy)))
+            (when (and (>= py y0) (< py y1))
+              (dotimes (xx w)
+                (let ((px (+ ox xx)))
+                  (when (and (>= px x0) (< px x1))
+                    (let ((c (* alpha (aref cov (+ (* yy w) xx)))))
+                      (when (> c 0d0) (blend-coverage cv px py c fg)))))))))
+        (let ((gg (float g 1d0)) (sd *stem-darkening*))
+          (%gamma-prep gg fg)
+          (let ((bg *g-bg*) (fgl *g-fg*) (gout *g-out*) (pix (canvas-pixels cv)))
+            (declare (type (simple-array double-float (256)) bg)
+                     (type (simple-array double-float (3)) fgl)
+                     (type (simple-array (unsigned-byte 8) (4097)) gout))
+            (let ((f0 (aref fgl 0)) (f1 (aref fgl 1)) (f2 (aref fgl 2)))
+              (dotimes (yy h)
+                (let ((py (+ oy yy)))
+                  (when (and (>= py y0) (< py y1))
+                    (dotimes (xx w)
+                      (let ((px (+ ox xx)))
+                        (when (and (>= px x0) (< px x1))
+                          (let ((c (* alpha (aref cov (+ (* yy w) xx)))))
+                            (when (> c 0d0)
+                              (let* ((a (if (= sd 1d0) (min 1d0 c) (expt (min 1d0 c) sd)))
+                                     (ia (- 1d0 a))
+                                     (i (* 3 (+ (* py cw) px))))
+                                (flet ((out (v) (aref gout (min 4096 (max 0 (round (* 4096d0 (max 0d0 v))))))))
+                                  (setf (aref pix i)       (out (+ (* ia (aref bg (aref pix i)))       (* a f0)))
+                                        (aref pix (+ i 1)) (out (+ (* ia (aref bg (aref pix (+ i 1)))) (* a f1)))
+                                        (aref pix (+ i 2)) (out (+ (* ia (aref bg (aref pix (+ i 2)))) (* a f2)))))))))))))))))))
+  (values))
+
 (defun fill-coverage-span (cv x y coverages fg &optional (n (length coverages)))
   "Blend N pixels starting at (X,Y) using per-pixel COVERAGES (double-float vector)."
   (dotimes (k n) (blend-coverage cv (+ x k) y (aref coverages k) fg)))

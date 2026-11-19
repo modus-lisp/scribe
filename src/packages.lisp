@@ -5,7 +5,7 @@
    ;; canvas + gamma-correct compositing (blend.lisp)
    #:canvas #:make-canvas #:make-rgba-canvas #:canvas-width #:canvas-height
    #:canvas-pixels #:canvas-alpha
-   #:blend-coverage #:fill-coverage-span
+   #:blend-coverage #:blend-coverage-glyph #:fill-coverage-span
    #:srgb->linear #:linear->srgb #:*srgb->linear* #:*linear->srgb*
    #:write-png
    ;; (later) font.lisp / shape.lisp / raster.lisp / atlas.lisp contracts
