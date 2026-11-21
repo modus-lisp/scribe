@@ -12,9 +12,26 @@
   (a nil :type (simple-array double-float (*))))   ; signed-area accumulation
 
 (defun %acc-line (r x0 y0 x1 y1)
-  "Accumulate one device-space line segment into R's area buffer (font-rs kernel)."
+  "Accumulate one device-space line segment into R's area buffer (font-rs kernel).
+
+   WHAT LIES LEFT OF THE BUFFER STILL COUNTS.  Coverage is the running sum of a row
+   from its left edge, so an edge at x < 0 -- a fill rasterized into a window of a
+   page (a strip, RASTERIZE-OUTLINE's :MAX-W with the origin inside the shape) --
+   changes every pixel right of it.  Such a part is moved onto x = 0, the same edge
+   for every pixel the buffer has; what lies right of it changes nothing and is
+   dropped (%ACC-LINE-1)."
   (declare (type raster r) (type double-float x0 y0 x1 y1))
-  (when (= y0 y1) (return-from %acc-line))
+  (cond ((= y0 y1))
+        ((and (>= x0 0d0) (>= x1 0d0)) (%acc-line-1 r x0 y0 x1 y1))
+        ((and (<= x0 0d0) (<= x1 0d0)) (%acc-line-1 r 0d0 y0 0d0 y1))
+        (t (let ((ym (+ y0 (* (- y1 y0) (/ (- x0) (- x1 x0))))))
+             (if (< x0 0d0)
+                 (progn (%acc-line-1 r 0d0 y0 0d0 ym) (%acc-line-1 r 0d0 ym x1 y1))
+                 (progn (%acc-line-1 r x0 y0 0d0 ym) (%acc-line-1 r 0d0 ym 0d0 y1)))))))
+
+(defun %acc-line-1 (r x0 y0 x1 y1)
+  (declare (type raster r) (type double-float x0 y0 x1 y1))
+  (when (= y0 y1) (return-from %acc-line-1))
   (let ((w (raster-w r)) (h (raster-h r)) (a (raster-a r)) (dir 1d0))
     (declare (type (simple-array double-float (*)) a))
     (when (> y0 y1) (rotatef x0 x1) (rotatef y0 y1) (setf dir -1d0))
@@ -107,10 +124,13 @@
         (%flatten-cubic r x0 y0 p01x p01y ax ay mx my (1+ depth))
         (%flatten-cubic r mx my bx by p23x p23y x1 y1 (1+ depth)))))
 
-(defun rasterize-outline (contours scale &key (dx 0d0) (dy 0d0) origin-x origin-y)
+(defun rasterize-outline (contours scale &key (dx 0d0) (dy 0d0) origin-x origin-y max-w max-h)
   "Scan-convert CONTOURS (font units) at SCALE px/unit with fractional pen offset
    (DX,DY) into a coverage bitmap. ORIGIN-X/Y (font units) map to bitmap (0,0);
-   y is flipped (font y-up -> bitmap y-down). Returns (values coverage w h)."
+   y is flipped (font y-up -> bitmap y-down). Returns (values coverage w h).
+   MAX-W / MAX-H: the bitmap is no bigger -- a page-wide fill drawn into a strip of
+   the page wants only the strip, and the origin may then lie inside the shape (what
+   is left of and above it is accounted for, not drawn: %ACC-LINE)."
   (let* ((minx 1d30) (miny 1d30) (maxx -1d30) (maxy -1d30))
     ;; device-space bbox to size the bitmap
     (dolist (c contours)
@@ -121,7 +141,7 @@
     (let* ((ox (or origin-x minx)) (oy (or origin-y maxy))
            (w (+ 2 (ceiling (* (- maxx ox) scale))))
            (h (+ 2 (ceiling (* (- oy miny) scale))))
-           (w (max 1 w)) (h (max 1 h))
+           (w (max 1 (if max-w (min w max-w) w))) (h (max 1 (if max-h (min h max-h) h)))
            (r (%make-raster :w w :h h :a (make-array (* w h) :element-type 'double-float
                                                               :initial-element 0d0))))
       (flet ((tx (x) (+ (* (- x ox) scale) dx))
